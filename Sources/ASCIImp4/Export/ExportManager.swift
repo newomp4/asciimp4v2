@@ -138,7 +138,7 @@ final class ExportManager {
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                 kCVPixelBufferWidthKey  as String: Int(outputSize.width),
                 kCVPixelBufferHeightKey as String: Int(outputSize.height)
             ]
@@ -272,7 +272,7 @@ final class ExportManager {
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                 kCVPixelBufferWidthKey  as String: Int(outputSize.width),
                 kCVPixelBufferHeightKey as String: Int(outputSize.height)
             ]
@@ -346,7 +346,7 @@ final class ExportManager {
             kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
         ]
         guard CVPixelBufferCreate(kCFAllocatorDefault, width, height,
-                                  kCVPixelFormatType_32ARGB, attrs as CFDictionary, &pb) == kCVReturnSuccess,
+                                  kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb) == kCVReturnSuccess,
               let pixelBuffer = pb else { return nil }
 
         CVPixelBufferLockBaseAddress(pixelBuffer, [])
@@ -362,6 +362,7 @@ final class ExportManager {
             bitmapInfo:        CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
         ) else { return nil }
 
+        ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return pixelBuffer
     }
