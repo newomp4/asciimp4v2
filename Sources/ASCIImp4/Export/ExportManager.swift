@@ -10,10 +10,11 @@ final class ExportManager {
     enum Format: String, CaseIterable, Identifiable {
         case h264      = "H.264 MP4"
         case prores422 = "ProRes 422"
-        case prores4444 = "ProRes 4444"
+        case prores4444 = "ProRes 4444 (alpha)"
         var id: String { rawValue }
         var fileExtension: String { self == .h264 ? "mp4" : "mov" }
         var avFileType: AVFileType { self == .h264 ? .mp4 : .mov }
+        var supportsAlpha: Bool { self == .prores4444 }
         var codec: AVVideoCodecType {
             switch self {
             case .h264:      return .h264
@@ -101,8 +102,13 @@ final class ExportManager {
         let sourceDuration = try await asset.load(.duration)
         let sourceFPS      = Double(try await track.load(.nominalFrameRate))
         let naturalSize    = try await track.load(.naturalSize)
+        let transform      = try await track.load(.preferredTransform)
         let totalFrames    = max(1, Int(sourceDuration.seconds * sourceFPS))
-        let outputSize     = outputSizeMode.cgSize(forSource: naturalSize)
+
+        // Apply preferredTransform so portrait/rotated sources report correct display dimensions.
+        let transformedSize = naturalSize.applying(transform)
+        let sourceSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+        let outputSize = outputSizeMode.cgSize(forSource: sourceSize)
 
         // Capture viewport size on main thread before going async
         let viewportSize = await MainActor.run { renderer.displayView?.bounds.size ?? .zero }
@@ -153,15 +159,14 @@ final class ExportManager {
         let frameDuration = CMTime(value: CMTimeValue(100), timescale: timescale)
         var frameIdx = 0
 
-        let ciCtx   = CIContext(options: [.useSoftwareRenderer: false])
         let tracker = appState.trackerEnabled ? TrackerProcessor() : nil
 
         while reader.status == .reading, !cancelled {
             guard let sample = readerOutput.copyNextSampleBuffer(),
                   let pixelBuf = CMSampleBufferGetImageBuffer(sample) else { break }
 
-            let ci = CIImage(cvPixelBuffer: pixelBuf)
-            guard let cg = ciCtx.createCGImage(ci, from: ci.extent) else {
+            // Convert directly from the pixel buffer — bypasses CIContext which can drop alpha.
+            guard let cg = pixelBuf.toCGImageDirect() else {
                 frameIdx += 1; continue
             }
 
@@ -339,6 +344,8 @@ final class ExportManager {
 
     // MARK: – Helpers
 
+    // MARK: – Pixel-buffer → CGImage (preserves alpha, no CIContext)
+
     private func cgImageToPixelBuffer(_ image: CGImage, width: Int, height: Int) -> CVPixelBuffer? {
         var pb: CVPixelBuffer?
         let attrs: [String: Any] = [
@@ -365,5 +372,36 @@ final class ExportManager {
         ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return pixelBuffer
+    }
+}
+
+// MARK: – CVPixelBuffer direct → CGImage (preserves alpha)
+
+private extension CVPixelBuffer {
+    func toCGImageDirect() -> CGImage? {
+        let w   = CVPixelBufferGetWidth(self)
+        let h   = CVPixelBufferGetHeight(self)
+        let cs  = CGColorSpaceCreateDeviceRGB()
+        let bmi = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+
+        // Allocate an owned CGContext so the CGImage lifetime is independent of this buffer.
+        guard let ctx = CGContext(data: nil, width: w, height: h,
+                                  bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: cs, bitmapInfo: bmi) else { return nil }
+
+        CVPixelBufferLockBaseAddress(self, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(self, .readOnly) }
+
+        guard let src = CVPixelBufferGetBaseAddress(self),
+              let dst = ctx.data else { return nil }
+
+        let srcBpr = CVPixelBufferGetBytesPerRow(self)
+        let dstBpr = ctx.bytesPerRow
+        for row in 0..<h {
+            memcpy(dst.advanced(by: row * dstBpr),
+                   src.advanced(by: row * srcBpr),
+                   min(srcBpr, dstBpr))
+        }
+        return ctx.makeImage()
     }
 }

@@ -163,6 +163,18 @@ struct ExportSheet: View {
                     }
                 }
 
+                if !format.supportsAlpha {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 9))
+                        Text("No alpha channel — use ProRes 4444 for transparency")
+                            .font(.system(size: 9, design: .monospaced))
+                    }
+                    .foregroundStyle(.orange.opacity(0.8))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                }
+
                 if let errMsg = exportMgr.errorMessage {
                     Text(errMsg)
                         .font(.system(size: 10, design: .monospaced))
