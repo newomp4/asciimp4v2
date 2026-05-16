@@ -75,6 +75,37 @@ struct RenderPanel: View {
                     }
                 }
 
+                // ── Composite Mode ────────────────────────────────────────────
+                CollapsibleSection(title: "Composite") {
+                    VStack(spacing: 0) {
+                        VStack(spacing: 4) {
+                            MonoSegmented(options: [
+                                ("Replace",  CompositeMode.replace),
+                                ("Overlay",  CompositeMode.overlay),
+                                ("Multiply", CompositeMode.multiply),
+                                ("Screen",   CompositeMode.screen)
+                            ], selection: $state.compositeMode)
+                            .padding(.horizontal, 12)
+                        }
+                        .padding(.vertical, 6)
+
+                        if state.compositeMode != .replace {
+                            SliderRow(
+                                label: "Opacity",
+                                tip: "ASCII layer opacity over the source video",
+                                value: $state.overlayOpacity,
+                                range: 0.05...1.0
+                            )
+                            Text(state.compositeMode.description)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(Mono.dim.opacity(0.8))
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
                 // ── Image Controls ────────────────────────────────────────────
                 CollapsibleSection(title: "Image Controls") {
                     VStack(spacing: 0) {
@@ -106,6 +137,11 @@ struct RenderPanel: View {
                             label: "Invert Luminance",
                             tip: "Swap dark↔light mapping — useful for light-on-dark vs dark-on-light",
                             value: $state.invertLuma
+                        )
+                        ToggleRow(
+                            label: "Invert Mask",
+                            tip: "Flip the alpha mask — use when ASCII fills the background instead of the subject",
+                            value: $state.invertAlpha
                         )
                     }
                 }

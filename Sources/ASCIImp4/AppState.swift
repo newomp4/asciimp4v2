@@ -22,6 +22,7 @@ final class AppState {
     var contrast: Float = 1.0
     var gamma: Float = 1.0
     var alphaThreshold: Float = 0.1
+    var invertAlpha: Bool = false
 
     // ── Color ─────────────────────────────────────────────────────────────────
     var colorMode: ColorMode = .source
@@ -56,6 +57,14 @@ final class AppState {
     var showLabels: Bool = true
     var labelContent: LabelContent = .id
     var scanLineAnimation: Bool = false
+    var showCenterDot: Bool = false
+    var centerDotSize: Float = 4.0
+    var showMotionTrails: Bool = false
+    var trailLength: Int = 15
+
+    // ── Composite ─────────────────────────────────────────────────────────────
+    var compositeMode: CompositeMode = .replace
+    var overlayOpacity: Float = 0.75
 
     // ── Active preset ─────────────────────────────────────────────────────────
     var activePresetName: String? = nil
@@ -117,7 +126,13 @@ final class AppState {
         connectorStyle    = p.connectorStyle
         showLabels        = p.showLabels
         labelContent      = p.labelContent
-        scanLineAnimation = p.scanLineAnimation
+        scanLineAnimation  = p.scanLineAnimation
+        showCenterDot      = p.showCenterDot
+        centerDotSize      = p.centerDotSize
+        showMotionTrails   = p.showMotionTrails
+        trailLength        = p.trailLength
+        compositeMode      = p.compositeMode
+        overlayOpacity     = p.overlayOpacity
 
         activePresetName  = p.name
     }
@@ -169,6 +184,12 @@ final class AppState {
         p.showLabels         = showLabels
         p.labelContent       = labelContent
         p.scanLineAnimation  = scanLineAnimation
+        p.showCenterDot      = showCenterDot
+        p.centerDotSize      = centerDotSize
+        p.showMotionTrails   = showMotionTrails
+        p.trailLength        = trailLength
+        p.compositeMode      = compositeMode
+        p.overlayOpacity     = overlayOpacity
         return p
     }
 }

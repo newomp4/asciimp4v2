@@ -377,6 +377,15 @@ enum PanelTab: String, CaseIterable {
     case color   = "Color"
     case tracker = "Tracker"
     case presets = "Presets"
+
+    var icon: String {
+        switch self {
+        case .render:  return "textformat"
+        case .color:   return "paintpalette"
+        case .tracker: return "viewfinder"
+        case .presets: return "slider.horizontal.3"
+        }
+    }
 }
 
 struct TabSwitcher: View {
@@ -404,13 +413,18 @@ private struct TabCell: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(tab.rawValue)
-                .font(.system(size: 10, weight: active ? .semibold : .regular, design: .monospaced))
-                .foregroundStyle(active ? Mono.accent : (hovered ? Mono.text : Mono.dim))
-                .frame(maxWidth: .infinity)
-                .frame(height: 34)
-                .contentShape(Rectangle())
-                .animation(.easeOut(duration: 0.1), value: hovered)
+            VStack(spacing: 3) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 11, weight: active ? .medium : .regular))
+                    .foregroundStyle(active ? Mono.accent : (hovered ? Mono.text : Mono.dim))
+                Text(tab.rawValue)
+                    .font(.system(size: 9, weight: active ? .semibold : .regular, design: .monospaced))
+                    .foregroundStyle(active ? Mono.accent : (hovered ? Mono.text : Mono.dim))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .contentShape(Rectangle())
+            .animation(.easeOut(duration: 0.1), value: hovered)
 
             ZStack {
                 Rectangle().fill(Color.clear).frame(height: 2)

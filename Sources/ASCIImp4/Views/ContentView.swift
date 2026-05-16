@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var isDragOver    = false
     @State private var lastCGImage: CGImage? = nil
     @State private var previewBg: PreviewBackground = .checker
+    @State private var motionTrails: [Int: [CGPoint]] = [:]
 
     // Keeps already-visited panels alive so switching back is instant
     @State private var visitedTabs: Set<PanelTab> = [.render]
@@ -62,7 +63,8 @@ struct ContentView: View {
         .background(Mono.bg0)
         .preferredColorScheme(.dark)
         .onAppear { wireRenderer() }
-        .onChange(of: appState.trackerEnabled) { _, on in on ? rerunTracker() : { clusters = [] }() }
+        .onChange(of: appState.trackerEnabled) { _, on in on ? rerunTracker() : { clusters = []; motionTrails = [:] }() }
+        .onChange(of: appState.showMotionTrails) { _, on in if !on { motionTrails = [:] } }
         .onChange(of: appState.detectionMode) { _, _ in rerunTracker() }
         .onChange(of: appState.sensitivity)   { _, _ in rerunTracker() }
         .onChange(of: appState.maxClusters)   { _, _ in rerunTracker() }
@@ -199,6 +201,7 @@ struct ContentView: View {
             if appState.trackerEnabled && !clusters.isEmpty {
                 TrackerOverlayView(
                     clusters:    clusters,
+                    trails:      motionTrails,
                     state:       appState,
                     contentRect: renderer.contentRect
                 )
@@ -309,7 +312,22 @@ struct ContentView: View {
             sensitivity: appState.sensitivity,
             minArea:     appState.minArea
         )
-        tracker.detectAsync(input) { clusters = $0 }
+        tracker.detectAsync(input) { [self] newClusters in
+            clusters = newClusters
+            guard appState.showMotionTrails, !newClusters.isEmpty else {
+                if !newClusters.isEmpty { /* keep existing trails */ } else { motionTrails = [:] }
+                return
+            }
+            var updated = motionTrails
+            for cl in newClusters {
+                var trail = updated[cl.id] ?? []
+                trail.insert(cl.center, at: 0)
+                if trail.count > appState.trailLength { trail = Array(trail.prefix(appState.trailLength)) }
+                updated[cl.id] = trail
+            }
+            let activeIDs = Set(newClusters.map { $0.id })
+            motionTrails = updated.filter { activeIDs.contains($0.key) }
+        }
     }
 
     private func rerunTracker() {

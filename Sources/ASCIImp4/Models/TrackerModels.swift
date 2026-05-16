@@ -1,5 +1,21 @@
 import CoreGraphics
 
+enum CompositeMode: String, CaseIterable, Codable {
+    case replace  = "Replace"
+    case overlay  = "Overlay"
+    case multiply = "Multiply"
+    case screen   = "Screen"
+
+    var description: String {
+        switch self {
+        case .replace:  return "ASCII replaces the source — no video beneath"
+        case .overlay:  return "ASCII drawn over source video at adjustable opacity"
+        case .multiply: return "ASCII multiplied into source — darkening effect"
+        case .screen:   return "ASCII screened over source — brightening effect"
+        }
+    }
+}
+
 enum DetectionMode: String, CaseIterable, Codable {
     case bright  = "Bright"
     case dark    = "Dark"

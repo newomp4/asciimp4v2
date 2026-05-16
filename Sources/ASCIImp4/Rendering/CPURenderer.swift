@@ -73,12 +73,13 @@ final class CPURenderer {
         for state: AppState,
         transparent: Bool = false,
         viewportSize: CGSize = .zero,
-        clusters: [TrackerCluster] = []
+        clusters: [TrackerCluster] = [],
+        trails: [Int: [CGPoint]] = [:]
     ) -> (CGImage?, CGRect) {
         let cellScale = viewportSize.width > 0 ? Double(size.width) / Double(viewportSize.width) : 1.0
         if abs(cellScale - 1.0) <= 0.01 { rebuildFontIfNeeded(state: state) }
         return render(source: cgImage, outputSize: size, state: state,
-                      transparent: transparent, cellScale: cellScale, clusters: clusters)
+                      transparent: transparent, cellScale: cellScale, clusters: clusters, trails: trails)
     }
 
     func renderTrackerFrame(
@@ -206,7 +207,8 @@ final class CPURenderer {
         state: AppState,
         transparent: Bool = false,
         cellScale: Double = 1.0,
-        clusters: [TrackerCluster] = []
+        clusters: [TrackerCluster] = [],
+        trails: [Int: [CGPoint]] = [:]
     ) -> (CGImage?, CGRect) {
 
         let cellW = max(1, Int(Double(state.cellSize)   * cellScale))
@@ -276,9 +278,29 @@ final class CPURenderer {
                                   space: cs, bitmapInfo: bmi)
         else { return (nil, cRect) }
 
-        if !transparent {
-            ctx.setFillColor(CGColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1))
-            ctx.fill(CGRect(x: 0, y: 0, width: outW, height: outH))
+        if state.compositeMode == .replace {
+            if !transparent {
+                ctx.setFillColor(CGColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: outW, height: outH))
+            }
+        } else {
+            // Draw source video as background.
+            // CGContext is bottom-origin but CGImage row-0 is top; flip to orient correctly.
+            ctx.saveGState()
+            ctx.translateBy(x: 0, y: CGFloat(outH))
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(source, in: CGRect(x: CGFloat(offsetX), y: CGFloat(offsetY),
+                                        width: CGFloat(renderW), height: CGFloat(renderH)))
+            ctx.restoreGState()
+        }
+
+        // Set blend mode and alpha for glyph layer
+        let glyphAlpha: CGFloat = state.compositeMode != .replace ? CGFloat(state.overlayOpacity) : 1.0
+        ctx.setAlpha(glyphAlpha)
+        switch state.compositeMode {
+        case .multiply: ctx.setBlendMode(.multiply)
+        case .screen:   ctx.setBlendMode(.screen)
+        default:        break
         }
 
         ctx.setFont(renderFont)
@@ -334,6 +356,10 @@ final class CPURenderer {
             ctx.showGlyphs(cells.map { $0.glyph }, at: cells.map { CGPoint(x: $0.x, y: $0.y) })
         }
 
+        // Restore normal blend for overlays
+        ctx.setAlpha(1.0)
+        ctx.setBlendMode(.normal)
+
         if state.scanLineAnimation {
             let linePhase = Int(CACurrentMediaTime() * 60) % 3
             ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.28))
@@ -347,7 +373,7 @@ final class CPURenderer {
 
         if state.trackerEnabled && !clusters.isEmpty {
             CPURenderer.drawTracker(clusters: clusters, contentRect: cRect, state: state,
-                                    ctx: ctx, outW: outW, outH: outH, scale: cellScale)
+                                    ctx: ctx, outW: outW, outH: outH, scale: cellScale, trails: trails)
         }
 
         return (ctx.makeImage(), cRect)
@@ -361,7 +387,8 @@ final class CPURenderer {
         state: AppState,
         ctx: CGContext,
         outW: Int, outH: Int,
-        scale: Double = 1.0
+        scale: Double = 1.0,
+        trails: [Int: [CGPoint]] = [:]
     ) {
         let sc  = CGFloat(scale)
         let cW  = CGFloat(outW)
@@ -383,6 +410,25 @@ final class CPURenderer {
             let tl = pt(padded.minX, padded.minY)
             let br = pt(padded.maxX, padded.maxY)
             return CGRect(x: tl.x, y: br.y, width: br.x - tl.x, height: tl.y - br.y)
+        }
+
+        // Motion trails
+        if state.showMotionTrails {
+            ctx.saveGState()
+            ctx.setLineCap(.round)
+            for cl in clusters {
+                guard let trail = trails[cl.id], trail.count > 1 else { continue }
+                let trailSW = sw * 0.55
+                for i in 0..<(trail.count - 1) {
+                    let alpha = CGFloat(1.0 - Float(i) / Float(max(trail.count - 1, 1))) * 0.65
+                    ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: alpha))
+                    ctx.setLineWidth(trailSW * CGFloat(1.0 - Float(i) / Float(trail.count) * 0.5))
+                    ctx.move(to: pt(trail[i].x, trail[i].y))
+                    ctx.addLine(to: pt(trail[i + 1].x, trail[i + 1].y))
+                    ctx.strokePath()
+                }
+            }
+            ctx.restoreGState()
         }
 
         // Connector lines
@@ -464,6 +510,16 @@ final class CPURenderer {
                 }
             }
             ctx.restoreGState()
+        }
+
+        // Center dots
+        if state.showCenterDot {
+            let dotR = CGFloat(state.centerDotSize) * sc / 2
+            ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            for cl in clusters {
+                let cpt = pt(cl.center.x, cl.center.y)
+                ctx.fillEllipse(in: CGRect(x: cpt.x - dotR, y: cpt.y - dotR, width: dotR * 2, height: dotR * 2))
+            }
         }
 
         // Labels

@@ -25,6 +25,7 @@ struct ASCIIPreviewView: NSViewRepresentable {
 
 struct TrackerOverlayView: View {
     let clusters:    [TrackerCluster]
+    let trails:      [Int: [CGPoint]]
     let state:       AppState
     let contentRect: CGRect  // normalized (0-1) region where ASCII content is drawn
 
@@ -40,6 +41,23 @@ struct TrackerOverlayView: View {
                     x: (contentRect.minX + nx * contentRect.width)  * size.width,
                     y: (contentRect.minY + ny * contentRect.height) * size.height
                 )
+            }
+
+            // Motion trails
+            if state.showMotionTrails {
+                for cl in clusters {
+                    guard let trail = trails[cl.id], trail.count > 1 else { continue }
+                    let trailSW = sw * 0.55
+                    for i in 0..<(trail.count - 1) {
+                        let alpha = Double(1.0 - Float(i) / Float(max(trail.count - 1, 1))) * 0.65
+                        let thisSW = trailSW * CGFloat(1.0 - Float(i) / Float(trail.count) * 0.5)
+                        var p = Path()
+                        p.move(to: pt(trail[i].x, trail[i].y))
+                        p.addLine(to: pt(trail[i + 1].x, trail[i + 1].y))
+                        ctx.stroke(p, with: .color(.white.opacity(alpha)),
+                                   style: StrokeStyle(lineWidth: thisSW, lineCap: .round))
+                    }
+                }
             }
             // Convert normalized cluster bounds → canvas rect, applying box padding.
             func boxRect(_ b: CGRect) -> CGRect {
@@ -139,6 +157,17 @@ struct TrackerOverlayView: View {
                             at: CGPoint(x: labelPt.x + 4, y: labelPt.y - 7)
                         )
                     }
+                }
+            }
+
+            // Center dots
+            if state.showCenterDot {
+                let dotR = CGFloat(state.centerDotSize) / 2
+                for cl in clusters {
+                    let cpt = pt(cl.center.x, cl.center.y)
+                    ctx.fill(Path(ellipseIn: CGRect(x: cpt.x - dotR, y: cpt.y - dotR,
+                                                    width: dotR * 2, height: dotR * 2)),
+                             with: .color(.white))
                 }
             }
         }

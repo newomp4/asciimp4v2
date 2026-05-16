@@ -68,14 +68,16 @@ final class ExportManager {
         format: Format,
         outputSizeMode: OutputSize,
         outputFPS: Double,
-        outputURL: URL
+        outputURL: URL,
+        separateTrackerLayer: Bool = false
     ) async {
         await MainActor.run { isExporting = true; progress = 0; errorMessage = nil; cancelled = false }
 
         do {
             try await _exportVideo(sourceURL: sourceURL, renderer: renderer, appState: appState,
                                    format: format, outputSizeMode: outputSizeMode,
-                                   outputFPS: outputFPS, outputURL: outputURL)
+                                   outputFPS: outputFPS, outputURL: outputURL,
+                                   separateTrackerLayer: separateTrackerLayer)
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription }
         }
@@ -90,7 +92,8 @@ final class ExportManager {
         format: Format,
         outputSizeMode: OutputSize,
         outputFPS: Double,
-        outputURL: URL
+        outputURL: URL,
+        separateTrackerLayer: Bool
     ) async throws {
 
         let asset = AVURLAsset(url: sourceURL)
@@ -105,12 +108,10 @@ final class ExportManager {
         let transform      = try await track.load(.preferredTransform)
         let totalFrames    = max(1, Int(sourceDuration.seconds * sourceFPS))
 
-        // Apply preferredTransform so portrait/rotated sources report correct display dimensions.
         let transformedSize = naturalSize.applying(transform)
         let sourceSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
         let outputSize = outputSizeMode.cgSize(forSource: sourceSize)
 
-        // Capture viewport size on main thread before going async
         let viewportSize = await MainActor.run { renderer.displayView?.bounds.size ?? .zero }
 
         // Reader
@@ -121,7 +122,7 @@ final class ExportManager {
         let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: readerSettings)
         reader.add(readerOutput)
 
-        // Writer
+        // Main writer
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
         }
@@ -140,35 +141,36 @@ final class ExportManager {
 
         let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         writerInput.expectsMediaDataInRealTime = false
-
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
-            sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey  as String: Int(outputSize.width),
-                kCVPixelBufferHeightKey as String: Int(outputSize.height)
-            ]
-        )
+            sourcePixelBufferAttributes: pixelBufferAttrs(outputSize))
         writer.add(writerInput)
+
+        // Optional tracker layer writer
+        let needsTrackerLayer = separateTrackerLayer && appState.trackerEnabled
+        let trackerURL = trackerLayerURL(for: outputURL)
+        let (trackerWriter, trackerInput, trackerAdaptor) = needsTrackerLayer
+            ? makeTrackerWriter(url: trackerURL, size: outputSize)
+            : (nil, nil, nil)
 
         guard reader.startReading() else { throw ExportError.readerFailed }
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
+        trackerWriter?.startWriting()
+        trackerWriter?.startSession(atSourceTime: .zero)
 
         let timescale = CMTimeScale(outputFPS * 100)
         let frameDuration = CMTime(value: CMTimeValue(100), timescale: timescale)
         var frameIdx = 0
 
         let tracker = appState.trackerEnabled ? TrackerProcessor() : nil
+        var exportTrails: [Int: [CGPoint]] = [:]
 
         while reader.status == .reading, !cancelled {
             guard let sample = readerOutput.copyNextSampleBuffer(),
                   let pixelBuf = CMSampleBufferGetImageBuffer(sample) else { break }
 
-            // Convert directly from the pixel buffer — bypasses CIContext which can drop alpha.
-            guard let cg = pixelBuf.toCGImageDirect() else {
-                frameIdx += 1; continue
-            }
+            guard let cg = pixelBuf.toCGImage() else { frameIdx += 1; continue }
 
             var clusters: [TrackerCluster] = []
             if let tracker {
@@ -179,9 +181,21 @@ final class ExportManager {
                 ))
             }
 
+            if appState.showMotionTrails {
+                for cl in clusters {
+                    var trail = exportTrails[cl.id] ?? []
+                    trail.insert(cl.center, at: 0)
+                    if trail.count > appState.trailLength { trail = Array(trail.prefix(appState.trailLength)) }
+                    exportTrails[cl.id] = trail
+                }
+                let activeIDs = Set(clusters.map { $0.id })
+                exportTrails = exportTrails.filter { activeIDs.contains($0.key) }
+            }
+
             guard let (rendered, _) = Optional(renderer.renderOffline(
                       cg, size: outputSize, for: appState,
-                      transparent: true, viewportSize: viewportSize, clusters: clusters)),
+                      transparent: format.supportsAlpha, viewportSize: viewportSize,
+                      clusters: clusters, trails: exportTrails)),
                   let rendered,
                   let outBuf = cgImageToPixelBuffer(rendered, width: Int(outputSize.width),
                                                     height: Int(outputSize.height))
@@ -193,22 +207,35 @@ final class ExportManager {
                 try await Task.sleep(nanoseconds: 5_000_000)
             }
             guard !cancelled else { break }
-
             adaptor.append(outBuf, withPresentationTime: pts)
-            frameIdx += 1
 
+            // Tracker layer frame
+            if let tInput = trackerInput, let tAdaptor = trackerAdaptor, !clusters.isEmpty {
+                if let tImg = renderer.renderTrackerFrame(cg, size: outputSize, for: appState,
+                                                         viewportSize: viewportSize, clusters: clusters),
+                   let tBuf = cgImageToPixelBuffer(tImg, width: Int(outputSize.width),
+                                                   height: Int(outputSize.height)) {
+                    while !tInput.isReadyForMoreMediaData && !cancelled {
+                        try await Task.sleep(nanoseconds: 5_000_000)
+                    }
+                    if !cancelled { tAdaptor.append(tBuf, withPresentationTime: pts) }
+                }
+            }
+
+            frameIdx += 1
             let p = Double(frameIdx) / Double(totalFrames)
             await MainActor.run { progress = min(p, 1.0) }
         }
 
         writerInput.markAsFinished()
+        trackerInput?.markAsFinished()
         await writer.finishWriting()
+        if let tw = trackerWriter { await tw.finishWriting() }
 
-        if writer.status == .failed {
-            throw ExportError.writerFailed(writer.error)
-        }
+        if writer.status == .failed { throw ExportError.writerFailed(writer.error) }
         if cancelled {
             try? FileManager.default.removeItem(at: outputURL)
+            try? FileManager.default.removeItem(at: trackerURL)
         }
     }
 
@@ -221,14 +248,16 @@ final class ExportManager {
         format: Format,
         outputSizeMode: OutputSize,
         outputFPS: Double,
-        outputURL: URL
+        outputURL: URL,
+        separateTrackerLayer: Bool = false
     ) async {
         await MainActor.run { isExporting = true; progress = 0; errorMessage = nil; cancelled = false }
 
         do {
             try await _exportSequence(framePaths: framePaths, renderer: renderer, appState: appState,
                                       format: format, outputSizeMode: outputSizeMode,
-                                      outputFPS: outputFPS, outputURL: outputURL)
+                                      outputFPS: outputFPS, outputURL: outputURL,
+                                      separateTrackerLayer: separateTrackerLayer)
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription }
         }
@@ -243,14 +272,13 @@ final class ExportManager {
         format: Format,
         outputSizeMode: OutputSize,
         outputFPS: Double,
-        outputURL: URL
+        outputURL: URL,
+        separateTrackerLayer: Bool
     ) async throws {
         guard !framePaths.isEmpty else { return }
 
-        // Determine output size from first frame
-        guard let firstImg = NSImage(contentsOf: framePaths[0]),
-              let firstRep = firstImg.representations.first as? NSBitmapImageRep,
-              let firstCG  = firstRep.cgImage else { throw ExportError.readerFailed }
+        guard let firstSrc = CGImageSourceCreateWithURL(framePaths[0] as CFURL, nil),
+              let firstCG  = CGImageSourceCreateImageAtIndex(firstSrc, 0, nil) else { throw ExportError.readerFailed }
 
         let naturalSize = CGSize(width: firstCG.width, height: firstCG.height)
         let outputSize  = outputSizeMode.cgSize(forSource: naturalSize)
@@ -273,32 +301,35 @@ final class ExportManager {
 
         let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         writerInput.expectsMediaDataInRealTime = false
-
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
-            sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey  as String: Int(outputSize.width),
-                kCVPixelBufferHeightKey as String: Int(outputSize.height)
-            ]
-        )
+            sourcePixelBufferAttributes: pixelBufferAttrs(outputSize))
         writer.add(writerInput)
+
+        // Optional tracker layer writer
+        let needsTrackerLayer = separateTrackerLayer && appState.trackerEnabled
+        let trackerURL = trackerLayerURL(for: outputURL)
+        let (trackerWriter, trackerInput, trackerAdaptor) = needsTrackerLayer
+            ? makeTrackerWriter(url: trackerURL, size: outputSize)
+            : (nil, nil, nil)
 
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
+        trackerWriter?.startWriting()
+        trackerWriter?.startSession(atSourceTime: .zero)
 
         let timescale = CMTimeScale(outputFPS * 100)
         let frameDuration = CMTime(value: 100, timescale: timescale)
 
         let viewportSize = await MainActor.run { renderer.displayView?.bounds.size ?? .zero }
         let tracker = appState.trackerEnabled ? TrackerProcessor() : nil
+        var exportTrails: [Int: [CGPoint]] = [:]
 
         for (idx, path) in framePaths.enumerated() {
             guard !cancelled else { break }
 
-            guard let img = NSImage(contentsOf: path),
-                  let rep = img.representations.first as? NSBitmapImageRep,
-                  let cg  = rep.cgImage
+            guard let imgSrc = CGImageSourceCreateWithURL(path as CFURL, nil),
+                  let cg    = CGImageSourceCreateImageAtIndex(imgSrc, 0, nil)
             else { continue }
 
             var clusters: [TrackerCluster] = []
@@ -310,9 +341,21 @@ final class ExportManager {
                 ))
             }
 
+            if appState.showMotionTrails {
+                for cl in clusters {
+                    var trail = exportTrails[cl.id] ?? []
+                    trail.insert(cl.center, at: 0)
+                    if trail.count > appState.trailLength { trail = Array(trail.prefix(appState.trailLength)) }
+                    exportTrails[cl.id] = trail
+                }
+                let activeIDs = Set(clusters.map { $0.id })
+                exportTrails = exportTrails.filter { activeIDs.contains($0.key) }
+            }
+
             guard let (rendered, _) = Optional(renderer.renderOffline(
                       cg, size: outputSize, for: appState,
-                      transparent: true, viewportSize: viewportSize, clusters: clusters)),
+                      transparent: format.supportsAlpha, viewportSize: viewportSize,
+                      clusters: clusters, trails: exportTrails)),
                   let rendered,
                   let buf = cgImageToPixelBuffer(rendered, width: Int(outputSize.width),
                                                  height: Int(outputSize.height))
@@ -324,25 +367,70 @@ final class ExportManager {
                 try await Task.sleep(nanoseconds: 5_000_000)
             }
             guard !cancelled else { break }
-
             adaptor.append(buf, withPresentationTime: pts)
+
+            // Tracker layer frame
+            if let tInput = trackerInput, let tAdaptor = trackerAdaptor, !clusters.isEmpty {
+                if let tImg = renderer.renderTrackerFrame(cg, size: outputSize, for: appState,
+                                                         viewportSize: viewportSize, clusters: clusters),
+                   let tBuf = cgImageToPixelBuffer(tImg, width: Int(outputSize.width),
+                                                   height: Int(outputSize.height)) {
+                    while !tInput.isReadyForMoreMediaData && !cancelled {
+                        try await Task.sleep(nanoseconds: 5_000_000)
+                    }
+                    if !cancelled { tAdaptor.append(tBuf, withPresentationTime: pts) }
+                }
+            }
 
             let p = Double(idx + 1) / Double(framePaths.count)
             await MainActor.run { progress = p }
         }
 
         writerInput.markAsFinished()
+        trackerInput?.markAsFinished()
         await writer.finishWriting()
+        if let tw = trackerWriter { await tw.finishWriting() }
 
-        if writer.status == .failed {
-            throw ExportError.writerFailed(writer.error)
-        }
+        if writer.status == .failed { throw ExportError.writerFailed(writer.error) }
         if cancelled {
             try? FileManager.default.removeItem(at: outputURL)
+            try? FileManager.default.removeItem(at: trackerURL)
         }
     }
 
     // MARK: – Helpers
+
+    private func trackerLayerURL(for url: URL) -> URL {
+        let base = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent()
+            .appendingPathComponent("\(base)_tracker")
+            .appendingPathExtension("mov")
+    }
+
+    private func pixelBufferAttrs(_ size: CGSize) -> [String: Any] {
+        [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey  as String: Int(size.width),
+            kCVPixelBufferHeightKey as String: Int(size.height)
+        ]
+    }
+
+    private func makeTrackerWriter(url: URL, size: CGSize)
+        -> (AVAssetWriter?, AVAssetWriterInput?, AVAssetWriterInputPixelBufferAdaptor?)
+    {
+        guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mov) else { return (nil, nil, nil) }
+        let settings: [String: Any] = [
+            AVVideoCodecKey:  AVVideoCodecType.proRes4444.rawValue,
+            AVVideoWidthKey:  Int(size.width),
+            AVVideoHeightKey: Int(size.height)
+        ]
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input, sourcePixelBufferAttributes: pixelBufferAttrs(size))
+        writer.add(input)
+        return (writer, input, adaptor)
+    }
 
     // MARK: – Pixel-buffer → CGImage (preserves alpha, no CIContext)
 

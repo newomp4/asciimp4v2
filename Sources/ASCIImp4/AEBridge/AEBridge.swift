@@ -116,9 +116,8 @@ final class AEBridge {
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             guard
                 let self,
-                let src = NSImage(contentsOf: url),
-                let rep = src.representations.first as? NSBitmapImageRep,
-                let cg  = rep.cgImage
+                let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                let cg  = CGImageSourceCreateImageAtIndex(src, 0, nil)
             else { return }
             DispatchQueue.main.async { self.onFrame?(cg) }
         }

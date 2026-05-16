@@ -53,6 +53,16 @@ struct Preset: Codable, Identifiable {
     var labelContent: LabelContent = .id
     var scanLineAnimation: Bool = false
 
+    // Composite
+    var compositeMode: CompositeMode = .replace
+    var overlayOpacity: Float = 0.75
+
+    // Tracker extras
+    var showCenterDot: Bool = false
+    var centerDotSize: Float = 4.0
+    var showMotionTrails: Bool = false
+    var trailLength: Int = 15
+
     // ── Built-in presets ─────────────────────────────────────────────────────
 
     static let builtins: [Preset] = [

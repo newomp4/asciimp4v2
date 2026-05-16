@@ -374,6 +374,39 @@ struct TrackerPanel: View {
                         }
                     }
 
+                    // ── Markers ───────────────────────────────────────────────
+                    CollapsibleSection(title: "Markers") {
+                        VStack(spacing: 0) {
+                            ToggleRow(
+                                label: "Center Dot",
+                                tip: "Draw a filled dot at each cluster's centroid",
+                                value: $state.showCenterDot
+                            )
+                            if state.showCenterDot {
+                                SliderRow(
+                                    label: "Dot Size",
+                                    tip: "Diameter of the center dot in pixels",
+                                    value: $state.centerDotSize,
+                                    range: 2...16,
+                                    format: "%.0f"
+                                )
+                            }
+                            ToggleRow(
+                                label: "Motion Trails",
+                                tip: "Show a fading trail of past cluster positions",
+                                value: $state.showMotionTrails
+                            )
+                            if state.showMotionTrails {
+                                IntSliderRow(
+                                    label: "Trail Length",
+                                    tip: "Number of past positions to show in the trail",
+                                    value: $state.trailLength,
+                                    range: 3...60
+                                )
+                            }
+                        }
+                    }
+
                     // ── Animation ─────────────────────────────────────────────
                     CollapsibleSection(title: "Animation") {
                         ToggleRow(
