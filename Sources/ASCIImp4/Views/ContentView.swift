@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var showExport    = false
     @State private var isDragOver    = false
     @State private var lastCGImage: CGImage? = nil
+    @State private var previewBg: PreviewBackground = .checker
 
     // Keeps already-visited panels alive so switching back is instant
     @State private var visitedTabs: Set<PanelTab> = [.render]
@@ -109,42 +110,36 @@ struct ContentView: View {
     // ── Header ────────────────────────────────────────────────────────────────
 
     private var panelHeader: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                // Logo
-                HStack(spacing: 0) {
-                    Text("ASCII")
-                        .font(.system(size: 11, weight: .black, design: .monospaced))
-                        .foregroundStyle(Mono.accent)
-                    Text("mp4")
-                        .font(.system(size: 11, weight: .light, design: .monospaced))
-                        .foregroundStyle(Mono.dim)
-                }
-
-                Spacer()
-
-                // AE indicator
-                if appState.aeBridgeEnabled {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(bridge.isWatching
-                                  ? Color(red: 0.25, green: 0.9, blue: 0.35)
-                                  : Mono.dim)
-                            .frame(width: 5, height: 5)
-                        Text("AE")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(Mono.dim)
-                    }
-                }
-
-                if appState.hasSource {
-                    MonoButton(label: "Export…", small: true) { showExport = true }
-                }
-                MonoButton(label: "Open", small: true) { openFilePicker() }
+        HStack(spacing: 8) {
+            // Logo
+            HStack(spacing: 0) {
+                Text("ASCII")
+                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                    .foregroundStyle(Mono.accent)
+                Text("mp4")
+                    .font(.system(size: 12, weight: .ultraLight, design: .monospaced))
+                    .foregroundStyle(Mono.dim)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+
+            Spacer()
+
+            // AE indicator dot
+            if appState.aeBridgeEnabled {
+                Circle()
+                    .fill(bridge.isWatching
+                          ? Color(red: 0.2, green: 0.85, blue: 0.4)
+                          : Mono.muted)
+                    .frame(width: 5, height: 5)
+                    .help(bridge.isWatching ? "AE Bridge active" : "AE Bridge idle")
+            }
+
+            if appState.hasSource {
+                MonoButton(label: "Export…", small: true) { showExport = true }
+            }
+            MonoButton(label: "Open", small: true) { openFilePicker() }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(Mono.bg0)
     }
 
@@ -189,6 +184,13 @@ struct ContentView: View {
 
     private var previewCanvas: some View {
         ZStack {
+            // Background layer
+            switch previewBg {
+            case .checker: CheckerboardView()
+            case .black:   Color.black.ignoresSafeArea().allowsHitTesting(false)
+            case .white:   Color.white.ignoresSafeArea().allowsHitTesting(false)
+            }
+
             ASCIIPreviewView(renderer: renderer)
 
             if !appState.hasSource {
@@ -206,6 +208,33 @@ struct ContentView: View {
                     .strokeBorder(Mono.accent.opacity(0.5), lineWidth: 1)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
+            }
+
+            // Background cycle button
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { previewBg = previewBg.next }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: previewBg.icon)
+                                .font(.system(size: 10, weight: .medium))
+                            Text(previewBg.label)
+                                .font(.system(size: 9, design: .monospaced))
+                        }
+                        .foregroundStyle(Mono.dim)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Mono.bg0.opacity(0.88))
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Mono.border.opacity(0.45), lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(10)
+                    .help("Cycle preview background (checker / black / white)")
+                }
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
@@ -239,6 +268,7 @@ struct ContentView: View {
         if FileManager.default.directoryExists(at: url) {
             appState.isSequence = true; appState.isVideo = false; appState.isImage = false
             appState.sourceURL  = url
+            video.stop()
             bridge.startWatching(folder: url)
         } else if imgExts.contains(ext) {
             appState.isImage = true; appState.isVideo = false; appState.isSequence = false
@@ -256,9 +286,8 @@ struct ContentView: View {
     private func loadImage(url: URL) {
         DispatchQueue.global(qos: .userInteractive).async {
             guard
-                let src = NSImage(contentsOf: url),
-                let rep = src.representations.first as? NSBitmapImageRep,
-                let cg  = rep.cgImage
+                let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                let cg  = CGImageSourceCreateImageAtIndex(src, 0, nil)
             else { return }
             DispatchQueue.main.async {
                 renderer.updateSource(cg)

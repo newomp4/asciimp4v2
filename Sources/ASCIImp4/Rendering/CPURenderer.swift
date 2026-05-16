@@ -20,7 +20,7 @@ final class ASCIIDisplayView: NSView {
     override func makeBackingLayer() -> CALayer {
         let l = CALayer()
         l.contentsGravity    = .resizeAspect
-        l.backgroundColor    = CGColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1)
+        l.backgroundColor    = .clear
         l.needsDisplayOnBoundsChange = true
         return l
     }
@@ -81,6 +81,44 @@ final class CPURenderer {
                       transparent: transparent, cellScale: cellScale, clusters: clusters)
     }
 
+    func renderTrackerFrame(
+        _ cgImage: CGImage,
+        size: CGSize,
+        for state: AppState,
+        viewportSize: CGSize,
+        clusters: [TrackerCluster]
+    ) -> CGImage? {
+        let outW = Int(size.width), outH = Int(size.height)
+        let cellScale = viewportSize.width > 0 ? Double(size.width) / Double(viewportSize.width) : 1.0
+        let cellW = max(1, Int(Double(state.cellSize) * cellScale))
+        let cellH = max(1, Int(Double(state.cellHeight) * cellScale))
+
+        let srcAspect  = Double(cgImage.width) / Double(cgImage.height)
+        let viewAspect = size.width / size.height
+        let renderW: Int; let renderH: Int; let offsetX: Int; let offsetY: Int
+        if srcAspect > viewAspect {
+            renderW = outW; renderH = max(Int(Double(outW) / srcAspect), cellH)
+            offsetX = 0;    offsetY = (outH - renderH) / 2
+        } else {
+            renderH = outH; renderW = max(Int(Double(outH) * srcAspect), cellW)
+            offsetX = (outW - renderW) / 2; offsetY = 0
+        }
+        let cRect = CGRect(
+            x: CGFloat(offsetX) / CGFloat(outW), y: CGFloat(offsetY) / CGFloat(outH),
+            width: CGFloat(renderW) / CGFloat(outW), height: CGFloat(renderH) / CGFloat(outH)
+        )
+
+        let bmi = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        guard let ctx = CGContext(data: nil, width: outW, height: outH, bitsPerComponent: 8,
+                                  bytesPerRow: outW * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bmi)
+        else { return nil }
+
+        CPURenderer.drawTracker(clusters: clusters, contentRect: cRect, state: state,
+                                ctx: ctx, outW: outW, outH: outH, scale: cellScale)
+        return ctx.makeImage()
+    }
+
     func renderCurrentFrameForExport(for state: AppState, transparent: Bool) -> CGImage? {
         guard let src = sourceImage else { return nil }
         rebuildFontIfNeeded(state: state)
@@ -125,7 +163,7 @@ final class CPURenderer {
 
         rebuildFontIfNeeded(state: state)
 
-        let (img, cRect) = render(source: source, outputSize: size, state: state)
+        let (img, cRect) = render(source: source, outputSize: size, state: state, transparent: true)
         DispatchQueue.main.async { [weak view, weak self] in
             view?.cgImage = img
             self?.lastFrame   = img
@@ -259,7 +297,8 @@ final class CPURenderer {
             for col in 0..<cols {
                 let si = (row * cols + col) * 4
                 let r  = grid[si], g = grid[si+1], b = grid[si+2], a = grid[si+3]
-                guard a >= state.alphaThreshold else { continue }
+                let alphaPass = state.invertAlpha ? (a < (1.0 - state.alphaThreshold)) : (a >= state.alphaThreshold)
+                guard alphaPass else { continue }
 
                 var luma = 0.299*r + 0.587*g + 0.114*b
                 if state.invertLuma { luma = 1.0 - luma }
@@ -308,7 +347,7 @@ final class CPURenderer {
 
         if state.trackerEnabled && !clusters.isEmpty {
             CPURenderer.drawTracker(clusters: clusters, contentRect: cRect, state: state,
-                                    ctx: ctx, outW: outW, outH: outH)
+                                    ctx: ctx, outW: outW, outH: outH, scale: cellScale)
         }
 
         return (ctx.makeImage(), cRect)
@@ -316,16 +355,18 @@ final class CPURenderer {
 
     // MARK: – Tracker overlay (CoreGraphics — mirrors TrackerOverlayView's SwiftUI Canvas)
 
-    private static func drawTracker(
+    static func drawTracker(
         clusters: [TrackerCluster],
         contentRect: CGRect,
         state: AppState,
         ctx: CGContext,
-        outW: Int, outH: Int
+        outW: Int, outH: Int,
+        scale: Double = 1.0
     ) {
+        let sc  = CGFloat(scale)
         let cW  = CGFloat(outW)
         let cH  = CGFloat(outH)
-        let sw  = CGFloat(state.strokeWidth)
+        let sw  = CGFloat(state.strokeWidth) * sc
         let pad = CGFloat(state.boxPadding)
 
         // Normalized source coord → CGContext point.
@@ -351,8 +392,8 @@ final class CPURenderer {
             ctx.setLineWidth(sw)
             switch state.connectorStyle {
             case .solid:  ctx.setLineDash(phase: 0, lengths: [])
-            case .dashed: ctx.setLineDash(phase: 0, lengths: [8, 5])
-            case .dotted: ctx.setLineDash(phase: 0, lengths: [2, 4])
+            case .dashed: ctx.setLineDash(phase: 0, lengths: [8 * sc, 5 * sc])
+            case .dotted: ctx.setLineDash(phase: 0, lengths: [2 * sc, 4 * sc])
             }
             for i in 0..<(clusters.count - 1) {
                 let a = clusters[i], b = clusters[i + 1]
@@ -374,7 +415,7 @@ final class CPURenderer {
                 ctx.setFillColor(fc.withAlphaComponent(CGFloat(state.fillOpacity)).cgColor)
                 for cl in clusters {
                     let r  = boxRect(cl.bounds)
-                    let cr = state.roundedCorners ? CGFloat(6) : 0
+                    let cr = state.roundedCorners ? CGFloat(6) * sc : 0
                     ctx.addPath(CGPath(roundedRect: r, cornerWidth: cr, cornerHeight: cr, transform: nil))
                 }
                 ctx.fillPath()
@@ -384,7 +425,7 @@ final class CPURenderer {
             ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
             for cl in clusters {
                 let r  = boxRect(cl.bounds)
-                let cr = state.roundedCorners ? CGFloat(6) : 0
+                let cr = state.roundedCorners ? CGFloat(6) * sc : 0
 
                 switch state.boxStyle {
                 case .rect:
@@ -427,7 +468,7 @@ final class CPURenderer {
 
         // Labels
         if state.showLabels {
-            let font = CTFontCreateWithName("Menlo-Regular" as CFString, 11, nil)
+            let font = CTFontCreateWithName("Menlo-Regular" as CFString, 11 * sc, nil)
             for cl in clusters {
                 let label: String
                 switch state.labelContent {
@@ -444,7 +485,7 @@ final class CPURenderer {
                     NSAttributedString(string: label, attributes: attrs)
                 )
                 let topLeft = pt(cl.bounds.minX, cl.bounds.minY)
-                ctx.textPosition = CGPoint(x: topLeft.x + 4, y: topLeft.y + 4)
+                ctx.textPosition = CGPoint(x: topLeft.x + 4 * sc, y: topLeft.y + 4 * sc)
                 CTLineDraw(line, ctx)
             }
         }

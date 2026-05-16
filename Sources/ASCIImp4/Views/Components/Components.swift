@@ -460,22 +460,84 @@ struct GridCell: View {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MARK: – Preview background
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PreviewBackground: CaseIterable {
+    case checker, black, white
+
+    var next: PreviewBackground {
+        let all = Self.allCases
+        return all[(all.firstIndex(of: self)! + 1) % all.count]
+    }
+
+    var icon: String {
+        switch self {
+        case .checker: return "squareshape.split.2x2"
+        case .black:   return "square.fill"
+        case .white:   return "square"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .checker: return "Checker"
+        case .black:   return "Black"
+        case .white:   return "White"
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: – Checkerboard background  (alpha transparency indicator)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct CheckerboardView: View {
+    private let tileSize: CGFloat = 12
+    private let dark  = Color(white: 0.07)
+    private let light = Color(white: 0.13)
+
+    var body: some View {
+        Canvas { ctx, size in
+            let cols = Int(ceil(size.width  / tileSize))
+            let rows = Int(ceil(size.height / tileSize))
+            for row in 0...rows {
+                for col in 0...cols {
+                    let rect = CGRect(x: CGFloat(col) * tileSize,
+                                     y: CGFloat(row) * tileSize,
+                                     width: tileSize, height: tileSize)
+                    ctx.fill(Path(rect), with: .color((row + col) % 2 == 0 ? dark : light))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MARK: – Drop zone
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct DropZoneOverlay: View {
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "square.and.arrow.down")
-                .font(.system(size: 30, weight: .thin))
-                .foregroundStyle(Mono.dim.opacity(0.6))
-            VStack(spacing: 3) {
+        VStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Mono.muted.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                    .frame(width: 56, height: 56)
+                Image(systemName: "arrow.down.to.line")
+                    .font(.system(size: 20, weight: .thin))
+                    .foregroundStyle(Mono.dim.opacity(0.55))
+            }
+            VStack(spacing: 4) {
                 Text("Drop a file to start")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(Mono.sub)
-                Text("Video · Image · PNG sequence folder")
+                Text("Video  ·  Image  ·  PNG sequence folder")
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(Mono.dim.opacity(0.7))
+                    .foregroundStyle(Mono.dim.opacity(0.6))
+                    .tracking(0.3)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

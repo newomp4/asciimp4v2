@@ -10,14 +10,16 @@ struct ExportSheet: View {
     let bridge:    AEBridge
     @Binding var isPresented: Bool
 
-    @State private var format:         ExportManager.Format     = .h264
-    @State private var outputSizeMode: ExportManager.OutputSize = .source
-    @State private var useSourceFPS  = true
-    @State private var customFPS: Double = 30
-    @State private var outputURL: URL? = nil
+    @State private var format:              ExportManager.Format     = .h264
+    @State private var outputSizeMode:      ExportManager.OutputSize = .source
+    @State private var useSourceFPS       = true
+    @State private var customFPS: Double  = 30
+    @State private var separateTracker    = false
+    @State private var outputURL: URL?    = nil
+    @State private var showSuccess        = false
 
     private var effectiveFPS: Double { useSourceFPS ? max(video.fps, 24) : customFPS }
-    private var hasVideo: Bool     { video.hasContent }
+    private var hasVideo: Bool     { video.hasContent && appState.isVideo }
     private var hasSequence: Bool  { bridge.frameCount > 0 }
     private var canExportVideo: Bool { hasVideo || hasSequence }
     private var sourceLabel: String {
@@ -33,6 +35,8 @@ struct ExportSheet: View {
 
             if exportMgr.isExporting {
                 exportingView
+            } else if showSuccess {
+                successView
             } else {
                 optionsView
             }
@@ -40,6 +44,9 @@ struct ExportSheet: View {
         .frame(width: 360)
         .background(Mono.bg1)
         .preferredColorScheme(.dark)
+        .onChange(of: exportMgr.isExporting) { _, exporting in
+            if !exporting && exportMgr.errorMessage == nil { showSuccess = true }
+        }
     }
 
     // MARK: – Header
@@ -163,6 +170,16 @@ struct ExportSheet: View {
                     }
                 }
 
+                // Tracker layer option — only relevant when tracker is enabled
+                if appState.trackerEnabled {
+                    row(label: "Tracker Layer") {
+                        Toggle("Separate .mov", isOn: $separateTracker)
+                            .toggleStyle(.checkbox)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Mono.sub)
+                    }
+                }
+
                 if !format.supportsAlpha {
                     HStack(spacing: 5) {
                         Image(systemName: "exclamationmark.triangle")
@@ -227,48 +244,111 @@ struct ExportSheet: View {
     // MARK: – Exporting progress
 
     private var exportingView: some View {
-        VStack(spacing: 16) {
-            Spacer(minLength: 20)
+        VStack(spacing: 0) {
+            Spacer(minLength: 28)
 
-            Text("Rendering ASCII art…")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Mono.sub)
+            VStack(spacing: 18) {
+                VStack(spacing: 6) {
+                    Text("Exporting…")
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Mono.text)
+                    Text(String(format: "%.0f%%", exportMgr.progress * 100))
+                        .font(.system(size: 11, design: .monospaced).monospacedDigit())
+                        .foregroundStyle(Mono.dim)
+                }
 
-            VStack(spacing: 6) {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2)
+                        RoundedRectangle(cornerRadius: 3)
                             .fill(Mono.bg3)
-                            .frame(height: 4)
-                        RoundedRectangle(cornerRadius: 2)
+                            .frame(height: 5)
+                        RoundedRectangle(cornerRadius: 3)
                             .fill(Mono.accent)
-                            .frame(width: geo.size.width * exportMgr.progress, height: 4)
+                            .frame(width: max(geo.size.width * exportMgr.progress, 6), height: 5)
+                            .animation(.linear(duration: 0.1), value: exportMgr.progress)
                     }
                 }
-                .frame(height: 4)
+                .frame(height: 5)
+                .padding(.horizontal, 24)
 
-                Text("\(Int(exportMgr.progress * 100))%")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Mono.dim)
+                Button { exportMgr.cancel() } label: {
+                    Text("Cancel")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Mono.dim)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 5)
+                        .background(Mono.bg2)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Mono.border.opacity(0.5), lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 24)
 
-            Button {
-                exportMgr.cancel()
-            } label: {
-                Text("Cancel")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Mono.dim)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
-                    .background(Mono.bg3)
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 20)
+            Spacer(minLength: 28)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 24)
+    }
+
+    // MARK: – Success
+
+    private var successView: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 28)
+
+            VStack(spacing: 16) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 28, weight: .thin))
+                    .foregroundStyle(Mono.accent)
+
+                VStack(spacing: 4) {
+                    Text("Export Complete")
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Mono.text)
+                    if let url = outputURL {
+                        Text(url.lastPathComponent)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Mono.dim)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        if let url = outputURL {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    } label: {
+                        Text("Reveal in Finder")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Mono.sub)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Mono.bg2)
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Mono.border.opacity(0.5), lineWidth: 1))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(outputURL == nil)
+
+                    Button {
+                        showSuccess = false
+                    } label: {
+                        Text("Done")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Mono.bg0)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Mono.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Spacer(minLength: 28)
+        }
+        .padding(.horizontal, 24)
     }
 
     // MARK: – Actions
@@ -292,28 +372,32 @@ struct ExportSheet: View {
         let panel = NSSavePanel()
         panel.allowedContentTypes  = [format == .h264 ? UTType.mpeg4Movie : UTType.quickTimeMovie]
         panel.nameFieldStringValue = "ascii-export"
-        panel.begin { [format, outputSizeMode, effectiveFPS] result in
+        panel.begin { [format, outputSizeMode, effectiveFPS, separateTracker] result in
             guard result == .OK, let url = panel.url else { return }
+            outputURL   = url
+            showSuccess = false
             Task {
                 if hasVideo, let srcURL = appState.sourceURL {
                     await exportMgr.exportVideo(
-                        sourceURL:      srcURL,
-                        renderer:       renderer,
-                        appState:       appState,
-                        format:         format,
-                        outputSizeMode: outputSizeMode,
-                        outputFPS:      effectiveFPS,
-                        outputURL:      url
+                        sourceURL:            srcURL,
+                        renderer:             renderer,
+                        appState:             appState,
+                        format:               format,
+                        outputSizeMode:       outputSizeMode,
+                        outputFPS:            effectiveFPS,
+                        outputURL:            url,
+                        separateTrackerLayer: separateTracker
                     )
                 } else if hasSequence {
                     await exportMgr.exportSequence(
-                        framePaths:     bridge.framePaths,
-                        renderer:       renderer,
-                        appState:       appState,
-                        format:         format,
-                        outputSizeMode: outputSizeMode,
-                        outputFPS:      effectiveFPS,
-                        outputURL:      url
+                        framePaths:           bridge.framePaths,
+                        renderer:             renderer,
+                        appState:             appState,
+                        format:               format,
+                        outputSizeMode:       outputSizeMode,
+                        outputFPS:            effectiveFPS,
+                        outputURL:            url,
+                        separateTrackerLayer: separateTracker
                     )
                 }
             }
