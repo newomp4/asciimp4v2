@@ -1,17 +1,19 @@
 import CoreGraphics
 
 enum CompositeMode: String, CaseIterable, Codable {
-    case replace  = "Replace"
-    case overlay  = "Overlay"
-    case multiply = "Multiply"
-    case screen   = "Screen"
+    case replace     = "Replace"
+    case passthrough = "Video"
+    case overlay     = "Overlay"
+    case multiply    = "Multiply"
+    case screen      = "Screen"
 
     var description: String {
         switch self {
-        case .replace:  return "ASCII replaces the source — no video beneath"
-        case .overlay:  return "ASCII drawn over source video at adjustable opacity"
-        case .multiply: return "ASCII multiplied into source — darkening effect"
-        case .screen:   return "ASCII screened over source — brightening effect"
+        case .replace:     return "ASCII replaces the source — no video beneath"
+        case .passthrough: return "Source video plays normally — tracker overlaid on top, no ASCII"
+        case .overlay:     return "ASCII drawn over source video at adjustable opacity"
+        case .multiply:    return "ASCII multiplied into source — darkening effect"
+        case .screen:      return "ASCII screened over source — brightening effect"
         }
     }
 }

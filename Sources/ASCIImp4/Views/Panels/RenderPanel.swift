@@ -78,10 +78,16 @@ struct RenderPanel: View {
                 // ── Composite Mode ────────────────────────────────────────────
                 CollapsibleSection(title: "Composite") {
                     VStack(spacing: 0) {
-                        VStack(spacing: 4) {
+                        VStack(spacing: 6) {
+                            // Row 1: source modes
                             MonoSegmented(options: [
-                                ("Replace",  CompositeMode.replace),
-                                ("Overlay",  CompositeMode.overlay),
+                                ("ASCII",  CompositeMode.replace),
+                                ("Video",  CompositeMode.passthrough),
+                                ("Overlay", CompositeMode.overlay)
+                            ], selection: $state.compositeMode)
+                            .padding(.horizontal, 12)
+                            // Row 2: blend modes
+                            MonoSegmented(options: [
                                 ("Multiply", CompositeMode.multiply),
                                 ("Screen",   CompositeMode.screen)
                             ], selection: $state.compositeMode)
@@ -89,20 +95,29 @@ struct RenderPanel: View {
                         }
                         .padding(.vertical, 6)
 
-                        if state.compositeMode != .replace {
+                        if state.compositeMode == .overlay {
                             SliderRow(
                                 label: "Opacity",
                                 tip: "ASCII layer opacity over the source video",
                                 value: $state.overlayOpacity,
                                 range: 0.05...1.0
                             )
-                            Text(state.compositeMode.description)
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(Mono.dim.opacity(0.8))
-                                .padding(.horizontal, 12)
-                                .padding(.bottom, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        if state.compositeMode == .multiply || state.compositeMode == .screen {
+                            SliderRow(
+                                label: "Opacity",
+                                tip: "ASCII blend opacity",
+                                value: $state.overlayOpacity,
+                                range: 0.05...1.0
+                            )
+                        }
+                        Text(state.compositeMode.description)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(Mono.dim.opacity(0.8))
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 8)
+                            .padding(.top, state.compositeMode == .replace || state.compositeMode == .passthrough ? 0 : 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
 

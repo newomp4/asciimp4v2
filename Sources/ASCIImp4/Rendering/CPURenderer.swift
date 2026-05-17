@@ -284,14 +284,32 @@ final class CPURenderer {
                 ctx.fill(CGRect(x: 0, y: 0, width: outW, height: outH))
             }
         } else {
-            // Draw source video as background.
-            // CGContext is bottom-origin but CGImage row-0 is top; flip to orient correctly.
+            // Draw source video as background (flip: CGContext bottom-origin, CGImage top-origin).
             ctx.saveGState()
             ctx.translateBy(x: 0, y: CGFloat(outH))
             ctx.scaleBy(x: 1, y: -1)
             ctx.draw(source, in: CGRect(x: CGFloat(offsetX), y: CGFloat(offsetY),
                                         width: CGFloat(renderW), height: CGFloat(renderH)))
             ctx.restoreGState()
+        }
+
+        // Passthrough: video only — skip all glyph rendering, jump to overlays
+        if state.compositeMode == .passthrough {
+            if state.scanLineAnimation {
+                let linePhase = Int(CACurrentMediaTime() * 60) % 3
+                ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.28))
+                for row in 0..<rows {
+                    if ((rows - 1 - row) + linePhase) % 3 == 0 {
+                        ctx.fill(CGRect(x: CGFloat(offsetX), y: CGFloat(row * cellH + offsetY),
+                                        width: CGFloat(renderW), height: CGFloat(cellH)))
+                    }
+                }
+            }
+            if state.trackerEnabled && !clusters.isEmpty {
+                CPURenderer.drawTracker(clusters: clusters, contentRect: cRect, state: state,
+                                        ctx: ctx, outW: outW, outH: outH, scale: cellScale, trails: trails)
+            }
+            return (ctx.makeImage(), cRect)
         }
 
         // Set blend mode and alpha for glyph layer
