@@ -568,6 +568,29 @@ struct HUDOverlayView: View {
                 let fCX   = (fMinX + fMaxX) / 2
                 let fCY   = (fMinY + fMaxY) / 2
 
+                // ── Keyframe-driven animation state ────────────────────────────
+                // Scope progress: 0=full open view, 1=fully scoped in
+                let effScopeP: Double = {
+                    if state.hudScopeKFEnabled && state.hudScopeKFEnd > state.hudScopeKFStart {
+                        let t = state.videoCurrentTime
+                        let s = Double(state.hudScopeKFStart)
+                        let e = Double(state.hudScopeKFEnd)
+                        return max(0, min((t - s) / (e - s), 1.0))
+                    }
+                    return Double(state.hudScopeProgress)
+                }()
+                // Lock age: <0=not locked, >=0=elapsed seconds since lock acquired
+                let lockAge: Double = {
+                    if state.hudLockKFEnabled {
+                        let dt = state.videoCurrentTime - Double(state.hudLockKFTime)
+                        return dt >= 0 ? dt : -1
+                    }
+                    guard let lt = state.hudLockTime else { return -1 }
+                    return now - lt.timeIntervalSinceReferenceDate
+                }()
+                let lockAcqP = lockAge >= 0 ? min(lockAge / 0.65, 1.0) : 0.0
+                let isLocked = lockAge >= 0
+
                 // ── Color tint ─────────────────────────────────────────────────
                 if state.hudTintEnabled && state.hudTintOpacity > 0.005 {
                     ctx.fill(
@@ -592,9 +615,13 @@ struct HUDOverlayView: View {
                     )
                 }
 
-                // ── Scope frame — circular optic boundary ──────────────────────
-                if state.hudScopeFrame {
-                    let scopeR = min(rawW, rawH) * 0.5 * CGFloat(state.hudScopeRadius)
+                // ── Scope frame — circular optic boundary (animates via effScopeP) ─
+                if state.hudScopeFrame && effScopeP > 0 {
+                    // At effScopeP=0: openR is huge (gradient off-screen → invisible)
+                    // At effScopeP=1: targetR (normal scope radius)
+                    let targetR = min(rawW, rawH) * 0.5 * CGFloat(state.hudScopeRadius)
+                    let openR   = max(rawW, rawH) * 2.2
+                    let scopeR  = openR + (targetR - openR) * CGFloat(effScopeP)
                     ctx.fill(
                         Rectangle().path(in: CGRect(x: rawMinX, y: rawMinY, width: rawW, height: rawH)),
                         with: .radialGradient(
@@ -609,13 +636,16 @@ struct HUDOverlayView: View {
                             endRadius: scopeR
                         )
                     )
-                    // Thin scope ring
-                    ctx.stroke(
-                        Path(ellipseIn: CGRect(x: fCX - scopeR * 0.885, y: fCY - scopeR * 0.885,
-                                               width: scopeR * 0.885 * 2, height: scopeR * 0.885 * 2)),
-                        with: .color(tint.opacity(0.22)),
-                        style: StrokeStyle(lineWidth: 0.5)
-                    )
+                    // Thin scope ring — fades in as scope closes
+                    if effScopeP > 0.12 {
+                        let ringAlpha = min((effScopeP - 0.12) / 0.35, 1.0) * 0.22
+                        ctx.stroke(
+                            Path(ellipseIn: CGRect(x: fCX - scopeR * 0.885, y: fCY - scopeR * 0.885,
+                                                   width: scopeR * 0.885 * 2, height: scopeR * 0.885 * 2)),
+                            with: .color(tint.opacity(ringAlpha)),
+                            style: StrokeStyle(lineWidth: 0.5)
+                        )
+                    }
                     // Vignette inside the scope
                     if state.hudVignetteEnabled {
                         ctx.fill(
@@ -623,7 +653,7 @@ struct HUDOverlayView: View {
                             with: .radialGradient(
                                 Gradient(stops: [
                                     .init(color: .clear, location: 0.35),
-                                    .init(color: .black.opacity(Double(state.hudVignetteStrength) * 0.5), location: 0.84)
+                                    .init(color: .black.opacity(Double(state.hudVignetteStrength) * 0.5 * effScopeP), location: 0.84)
                                 ]),
                                 center: CGPoint(x: fCX, y: fCY),
                                 startRadius: 0,
@@ -1369,48 +1399,93 @@ struct HUDOverlayView: View {
                     }
                 }
 
-                // ── Lock arc (8-sector acquisition scan) ───────────────────────
+                // ── Lock arc (scanning → lock acquired animation) ──────────────
                 if state.hudLockArc {
                     let lockR: CGFloat = 58 * sc
-                    let sectorDur: Double = 1.9
-                    let tPhase  = (now / (sectorDur * 8)).truncatingRemainder(dividingBy: 1.0)
-                    let sectIdx = Int(tPhase * 8)
-                    let sectFrac = (tPhase * 8).truncatingRemainder(dividingBy: 1.0)
-                    let holdAlpha = sectFrac < 0.68 ? 0.58 : max(0, (1.0 - sectFrac) / 0.32) * 0.58
-                    let sectAngle = CGFloat(sectIdx) * .pi / 4 - .pi / 2
 
-                    // Faint full ring
-                    ctx.stroke(Path(ellipseIn: CGRect(x: fCX-lockR, y: fCY-lockR, width: lockR*2, height: lockR*2)),
-                               with: .color(tint.opacity(0.06)), style: StrokeStyle(lineWidth: 0.4))
+                    if isLocked {
+                        // — Lock acquired state / acquisition animation ————————
+                        // Full ring (brightens with lock)
+                        ctx.stroke(Path(ellipseIn: CGRect(x: fCX-lockR, y: fCY-lockR, width: lockR*2, height: lockR*2)),
+                                   with: .color(tint.opacity(0.08 + lockAcqP * 0.18)), style: StrokeStyle(lineWidth: 0.5 * bsw))
 
-                    // 8 sector-boundary ticks
-                    for s in 0..<8 {
-                        let a = CGFloat(s) * .pi / 4 - .pi / 2
-                        let x1 = fCX + (lockR - 4*sc) * cos(a)
-                        let y1 = fCY + (lockR - 4*sc) * sin(a)
-                        let x2 = fCX + (lockR + 4*sc) * cos(a)
-                        let y2 = fCY + (lockR + 4*sc) * sin(a)
-                        var tk = Path()
-                        tk.move(to: CGPoint(x: x1, y: y1))
-                        tk.addLine(to: CGPoint(x: x2, y: y2))
-                        let active = s == sectIdx
-                        ctx.stroke(tk, with: .color(tint.opacity(active ? 0.55 : 0.18)),
-                                   style: StrokeStyle(lineWidth: active ? 0.7 : 0.4))
+                        // All 8 sector ticks illuminate simultaneously
+                        for s in 0..<8 {
+                            let a  = CGFloat(s) * .pi / 4 - .pi / 2
+                            let x1 = fCX + (lockR - 5*sc) * cos(a)
+                            let y1 = fCY + (lockR - 5*sc) * sin(a)
+                            let x2 = fCX + (lockR + 5*sc) * cos(a)
+                            let y2 = fCY + (lockR + 5*sc) * sin(a)
+                            var tk = Path(); tk.move(to: CGPoint(x: x1, y: y1)); tk.addLine(to: CGPoint(x: x2, y: y2))
+                            ctx.stroke(tk, with: .color(tint.opacity(0.18 + lockAcqP * 0.62)),
+                                       style: StrokeStyle(lineWidth: 0.8 * bsw))
+                        }
+
+                        // Acquisition flash ring: expands outward and fades as lock is confirmed
+                        if lockAcqP < 0.72 {
+                            let fp      = min(lockAcqP / 0.72, 1.0)
+                            let flashR  = lockR * CGFloat(0.45 + fp * 0.90)
+                            let flashA  = (1.0 - fp) * 0.80
+                            ctx.stroke(Path(ellipseIn: CGRect(x: fCX-flashR, y: fCY-flashR, width: flashR*2, height: flashR*2)),
+                                       with: .color(tint.opacity(flashA)), style: StrokeStyle(lineWidth: 1.2 * bsw))
+                        }
+
+                        // Inner lock ring — appears as acq settles, pulses gently
+                        if lockAcqP > 0.5 {
+                            let rA    = min((lockAcqP - 0.5) / 0.20, 1.0) * (0.46 + 0.10 * sin(now * 2.2))
+                            let innerR = lockR * 0.88
+                            ctx.stroke(Path(ellipseIn: CGRect(x: fCX-innerR, y: fCY-innerR, width: innerR*2, height: innerR*2)),
+                                       with: .color(tint.opacity(rA)), style: StrokeStyle(lineWidth: 0.6 * bsw))
+                        }
+
+                        // "LOCKED" label — fades in after ticks illuminate
+                        if lockAcqP > 0.48 {
+                            let txtA    = min((lockAcqP - 0.48) / 0.22, 1.0) * 0.78
+                            let lockFont = Font.system(size: 7 * ts, weight: .medium, design: .monospaced)
+                            ctx.draw(Text("LOCKED").font(lockFont).foregroundStyle(tint.opacity(txtA)),
+                                     at: CGPoint(x: fCX, y: fCY + lockR + 14*sc), anchor: .center)
+                        }
+
+                    } else {
+                        // — Scanning state ————————————————————————————————————
+                        let sectorDur: Double = 1.9
+                        let tPhase    = (now / (sectorDur * 8)).truncatingRemainder(dividingBy: 1.0)
+                        let sectIdx   = Int(tPhase * 8)
+                        let sectFrac  = (tPhase * 8).truncatingRemainder(dividingBy: 1.0)
+                        let holdAlpha = sectFrac < 0.68 ? 0.58 : max(0, (1.0 - sectFrac) / 0.32) * 0.58
+                        let sectAngle = CGFloat(sectIdx) * .pi / 4 - .pi / 2
+
+                        // Faint full ring
+                        ctx.stroke(Path(ellipseIn: CGRect(x: fCX-lockR, y: fCY-lockR, width: lockR*2, height: lockR*2)),
+                                   with: .color(tint.opacity(0.06)), style: StrokeStyle(lineWidth: 0.4))
+
+                        // 8 sector-boundary ticks
+                        for s in 0..<8 {
+                            let a  = CGFloat(s) * .pi / 4 - .pi / 2
+                            let x1 = fCX + (lockR - 4*sc) * cos(a)
+                            let y1 = fCY + (lockR - 4*sc) * sin(a)
+                            let x2 = fCX + (lockR + 4*sc) * cos(a)
+                            let y2 = fCY + (lockR + 4*sc) * sin(a)
+                            var tk = Path(); tk.move(to: CGPoint(x: x1, y: y1)); tk.addLine(to: CGPoint(x: x2, y: y2))
+                            let active = s == sectIdx
+                            ctx.stroke(tk, with: .color(tint.opacity(active ? 0.55 : 0.18)),
+                                       style: StrokeStyle(lineWidth: active ? 0.7 : 0.4))
+                        }
+
+                        // Held sector arc
+                        var lkArc = Path()
+                        lkArc.addArc(center: CGPoint(x: fCX, y: fCY), radius: lockR,
+                                     startAngle: .radians(Double(sectAngle)),
+                                     endAngle:   .radians(Double(sectAngle + .pi * 0.44)), clockwise: false)
+                        ctx.stroke(lkArc, with: .color(tint.opacity(holdAlpha)),
+                                   style: StrokeStyle(lineWidth: 0.7 * bsw, lineCap: .round))
+
+                        // Label on active sector
+                        let midAngle = sectAngle + .pi * 0.22
+                        let lR: CGFloat = lockR - 9*sc
+                        ctx.draw(Text(["A","B","C","D","E","F","G","H"][sectIdx]).font(compassFont).foregroundStyle(tint.opacity(0.32)),
+                                 at: CGPoint(x: fCX + lR*cos(midAngle), y: fCY + lR*sin(midAngle)), anchor: .center)
                     }
-
-                    // Held sector arc
-                    var lkArc = Path()
-                    lkArc.addArc(center: CGPoint(x: fCX, y: fCY), radius: lockR,
-                                 startAngle: .radians(Double(sectAngle)),
-                                 endAngle: .radians(Double(sectAngle + .pi * 0.44)), clockwise: false)
-                    ctx.stroke(lkArc, with: .color(tint.opacity(holdAlpha)),
-                               style: StrokeStyle(lineWidth: 0.7 * bsw, lineCap: .round))
-
-                    // Label on active sector
-                    let midAngle = sectAngle + .pi * 0.22
-                    let lR: CGFloat = lockR - 9*sc
-                    ctx.draw(Text(["A","B","C","D","E","F","G","H"][sectIdx]).font(compassFont).foregroundStyle(tint.opacity(0.32)),
-                             at: CGPoint(x: fCX + lR*cos(midAngle), y: fCY + lR*sin(midAngle)), anchor: .center)
                 }
 
             }   // end Canvas

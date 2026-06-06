@@ -67,6 +67,8 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear { wireRenderer() }
         .onChange(of: appState.hudEnabled)        { _, on in if on { appState.hudInitTime = Date() } }
+        .onChange(of: video.currentTime)          { _, t  in appState.videoCurrentTime = t }
+        .onChange(of: clusters)                   { _, c  in updateLockState(from: c) }
         .onChange(of: appState.trackerEnabled)    { _, on in on ? rerunTracker() : { clusters = []; motionTrails = [:] }() }
         .onChange(of: appState.showMotionTrails)  { _, on in if !on { motionTrails = [:] } }
         .onChange(of: appState.detectionMode)     { _, _ in rerunTracker() }
@@ -348,6 +350,19 @@ struct ContentView: View {
     private func rerunTracker() {
         guard appState.trackerEnabled, let cg = lastCGImage else { return }
         runTracker(cgImage: cg)
+    }
+
+    private func updateLockState(from newClusters: [TrackerCluster]) {
+        guard appState.hudEnabled && appState.hudLockArc && !appState.hudLockKFEnabled else {
+            if !appState.hudLockKFEnabled { appState.hudLockTime = nil }
+            return
+        }
+        let hasLock = newClusters.contains { $0.confidence > 0.82 }
+        if hasLock {
+            if appState.hudLockTime == nil { appState.hudLockTime = Date() }
+        } else {
+            appState.hudLockTime = nil
+        }
     }
 }
 

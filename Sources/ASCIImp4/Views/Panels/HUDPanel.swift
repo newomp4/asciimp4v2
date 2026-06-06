@@ -258,6 +258,62 @@ struct HUDPanel: View {
                             }
                         }
                     }
+
+                    // ── Scope Animation ───────────────────────────────────────
+                    if state.hudScopeFrame {
+                        CollapsibleSection(title: "Scope Animation", initiallyExpanded: true) {
+                            VStack(spacing: 0) {
+                                if !state.hudScopeKFEnabled {
+                                    SliderRow(label: "Progress", tip: "Manually set how far the scope has zoomed in — 0 = full open view, 1 = fully scoped", value: $state.hudScopeProgress, range: 0...1)
+                                }
+                                ToggleRow(label: "Auto Timeline", tip: "Animate scope from video playback time — set start and end seconds and it eases in automatically", value: $state.hudScopeKFEnabled)
+                                if state.hudScopeKFEnabled {
+                                    SliderRow(label: "Open at (s)",   tip: "Video time in seconds where scope starts closing in", value: $state.hudScopeKFStart, range: 0...120, format: "%.1f")
+                                    SliderRow(label: "Closed at (s)", tip: "Video time in seconds where scope is fully zoomed in", value: $state.hudScopeKFEnd, range: 0...120, format: "%.1f")
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "info.circle")
+                                            .font(.system(size: 9))
+                                        Text("Eases in between the two times — scrub video to preview")
+                                            .font(.system(size: 9, design: .monospaced))
+                                    }
+                                    .foregroundStyle(Mono.dim)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Lock Animation ────────────────────────────────────────
+                    if state.hudLockArc {
+                        CollapsibleSection(title: "Lock Animation", initiallyExpanded: true) {
+                            VStack(spacing: 0) {
+                                ToggleRow(label: "Timeline Trigger", tip: "Fire the lock-acquired animation at a specific video time instead of waiting for the tracker", value: $state.hudLockKFEnabled)
+                                if state.hudLockKFEnabled {
+                                    SliderRow(label: "Fire at (s)", tip: "Video time in seconds when LOCKED animation triggers", value: $state.hudLockKFTime, range: 0...120, format: "%.1f")
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "info.circle")
+                                            .font(.system(size: 9))
+                                        Text("Lock persists from this time forward until reset")
+                                            .font(.system(size: 9, design: .monospaced))
+                                    }
+                                    .foregroundStyle(Mono.dim)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 4)
+                                } else {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "info.circle")
+                                            .font(.system(size: 9))
+                                        Text("Lock triggers when a tracked target holds confidence > 82%")
+                                            .font(.system(size: 9, design: .monospaced))
+                                    }
+                                    .foregroundStyle(Mono.dim)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Spacer(minLength: 16)

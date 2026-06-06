@@ -130,6 +130,20 @@ final class AppState {
     var hudThreatDiamond: Bool = false      // threat sector diamonds at 4 diagonal positions
     var hudLockArc: Bool = false            // sector-scan lock acquisition arc (8 sectors, holds then steps)
 
+    // Scope zoom animation — 0=full open view, 1=fully scoped in
+    var hudScopeProgress: Float = 1.0       // manual 0-1 slider
+    var hudScopeKFEnabled: Bool = false     // auto-animate from video timeline
+    var hudScopeKFStart: Float = 0.0        // video time (s) where scope begins closing
+    var hudScopeKFEnd: Float = 2.0          // video time (s) where scope fully closed
+
+    // Lock animation — driven by tracker confidence or video time keyframe
+    var hudLockTime: Date? = nil            // set when target confidence hits threshold
+    var hudLockKFEnabled: Bool = false      // trigger lock at a specific video time
+    var hudLockKFTime: Float = 5.0          // video time (s) when lock fires
+
+    // Video time — synced from VideoProcessor so HUD can keyframe against it
+    var videoCurrentTime: Double = 0
+
     // Boot animation — set to Date() when HUD is enabled; drives 2s init sequence
     var hudInitTime: Date? = nil
 
