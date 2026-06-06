@@ -353,10 +353,10 @@ struct ContentView: View {
     }
 
     private func updateLockState(from newClusters: [TrackerCluster]) {
-        guard appState.hudEnabled && appState.hudLockArc && !appState.hudLockKFEnabled else {
-            if !appState.hudLockKFEnabled { appState.hudLockTime = nil }
-            return
-        }
+        guard appState.hudEnabled && appState.hudLockArc else { return }
+        // Keyframe-based lock takes priority over tracker
+        let hasLockKF = appState.hudKeyframes.contains { $0.isLockKF }
+        guard !hasLockKF else { return }
         let hasLock = newClusters.contains { $0.confidence > 0.82 }
         if hasLock {
             if appState.hudLockTime == nil { appState.hudLockTime = Date() }

@@ -569,22 +569,30 @@ struct HUDOverlayView: View {
                 let fCY   = (fMinY + fMaxY) / 2
 
                 // ── Keyframe-driven animation state ────────────────────────────
-                // Scope progress: 0=full open view, 1=fully scoped in
+                let vt = state.videoCurrentTime
+
+                // Scope progress — interpolate between timeline KFs, fall back to slider
                 let effScopeP: Double = {
-                    if state.hudScopeKFEnabled && state.hudScopeKFEnd > state.hudScopeKFStart {
-                        let t = state.videoCurrentTime
-                        let s = Double(state.hudScopeKFStart)
-                        let e = Double(state.hudScopeKFEnd)
-                        return max(0, min((t - s) / (e - s), 1.0))
+                    let kfs = state.hudKeyframes.filter { $0.isScopeKF }.sorted { $0.time < $1.time }
+                    guard !kfs.isEmpty else { return Double(state.hudScopeProgress) }
+                    if vt <= kfs.first!.time { return Double(kfs.first!.scopeValue ?? state.hudScopeProgress) }
+                    if vt >= kfs.last!.time  { return Double(kfs.last!.scopeValue  ?? state.hudScopeProgress) }
+                    for i in 0..<kfs.count - 1 {
+                        let a = kfs[i], b = kfs[i + 1]
+                        guard vt >= a.time && vt <= b.time else { continue }
+                        let raw = (vt - a.time) / (b.time - a.time)
+                        let smooth = raw * raw * (3 - 2 * raw)   // smoothstep ease
+                        let va = Double(a.scopeValue ?? state.hudScopeProgress)
+                        let vb = Double(b.scopeValue ?? state.hudScopeProgress)
+                        return va + (vb - va) * smooth
                     }
                     return Double(state.hudScopeProgress)
                 }()
-                // Lock age: <0=not locked, >=0=elapsed seconds since lock acquired
+
+                // Lock age — timeline KFs fire at their time; fall back to tracker
                 let lockAge: Double = {
-                    if state.hudLockKFEnabled {
-                        let dt = state.videoCurrentTime - Double(state.hudLockKFTime)
-                        return dt >= 0 ? dt : -1
-                    }
+                    let lkfs = state.hudKeyframes.filter { $0.isLockKF }.sorted { $0.time < $1.time }
+                    if let fired = lkfs.last(where: { $0.time <= vt }) { return vt - fired.time }
                     guard let lt = state.hudLockTime else { return -1 }
                     return now - lt.timeIntervalSinceReferenceDate
                 }()
@@ -1536,93 +1544,334 @@ struct TransportBar: View {
     @Bindable var state:  AppState
     @Bindable var bridge: AEBridge
 
-    @State private var isScrubbing = false
-    @State private var playBtnHovered = false
-    @State private var loopBtnHovered = false
+    @State private var isScrubbing  = false
+    @State private var selectedKFID: UUID? = nil
+
+    private var hasVideo:  Bool { video.hasContent }
+    private var hasBridge: Bool { !hasVideo && bridge.frameCount > 0 }
+    private var showKFButtons: Bool { hasVideo && state.hudEnabled && (state.hudScopeFrame || state.hudLockArc) }
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Play / Pause
-            Button { video.togglePlayPause() } label: {
-                Image(systemName: video.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(playBtnHovered ? Mono.accent : Mono.text)
-                    .frame(width: 26, height: 26)
-                    .background(playBtnHovered ? Mono.bg3 : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-            }
-            .buttonStyle(.plain)
-            .disabled(!video.hasContent && bridge.frameCount == 0)
-            .onHover { playBtnHovered = $0 }
+        VStack(spacing: 0) {
+            if hasVideo { kfTrack }
+            controls
+        }
+        .background(Mono.bg0)
+        .overlay(Rectangle().fill(Mono.muted.opacity(0.55)).frame(height: 1), alignment: .top)
+    }
 
-            if video.hasContent {
-                Slider(
-                    value: Binding(
-                        get: { video.currentTime },
-                        set: { t in
-                            video.currentTime = t
-                            if isScrubbing { video.scrub(to: t) }
-                            else           { video.seek(to: t) }
-                        }
-                    ),
-                    in: 0...max(video.duration, 0.001),
-                    onEditingChanged: { editing in
-                        isScrubbing = editing
-                        if !editing { video.seek(to: video.currentTime) }
-                    }
+    // ── Keyframe track ─────────────────────────────────────────────────────────
+
+    private var kfTrack: some View {
+        GeometryReader { geo in
+            let w    = geo.size.width
+            let h    = geo.size.height
+            let inset: CGFloat = 12
+            let tw   = w - inset * 2
+            let dur  = max(video.duration, 0.001)
+            let pct  = CGFloat(state.videoCurrentTime / dur)
+            let phX  = inset + tw * pct
+            let midY = h * 0.44
+
+            Canvas { ctx, size in
+                // ── Track ────────────────────────────────────────────
+                let trackH: CGFloat = 1.5
+                ctx.fill(
+                    Path(CGRect(x: inset, y: midY - trackH/2, width: tw, height: trackH)),
+                    with: .color(Mono.bg3)
                 )
-                .tint(Mono.accent)
+                if pct > 0.001 {
+                    ctx.fill(
+                        Path(CGRect(x: inset, y: midY - trackH/2, width: tw * pct, height: trackH)),
+                        with: .color(Mono.accent.opacity(0.28))
+                    )
+                }
 
-                Text(formatTime(video.currentTime))
+                // ── Time labels ──────────────────────────────────────
+                let labelY = size.height - 5
+                let labelFont = Font.system(size: 7.5, design: .monospaced)
+                let labelColor = Mono.dim.opacity(0.55)
+                ctx.draw(Text("0:00").font(labelFont).foregroundStyle(labelColor),
+                         at: CGPoint(x: inset, y: labelY), anchor: .bottom)
+                ctx.draw(Text(formatTime(dur)).font(labelFont).foregroundStyle(labelColor),
+                         at: CGPoint(x: w - inset, y: labelY), anchor: .bottom)
+                if dur > 8 {
+                    ctx.draw(Text(formatTime(dur / 2)).font(labelFont).foregroundStyle(labelColor),
+                             at: CGPoint(x: inset + tw / 2, y: labelY), anchor: .bottom)
+                }
+
+                // ── Keyframe markers ─────────────────────────────────
+                for kf in state.hudKeyframes {
+                    let kfX = inset + tw * CGFloat(kf.time / dur)
+                    let sel  = selectedKFID == kf.id
+                    let col: Color = kf.isLockKF ? .orange : Mono.accent
+                    let sz: CGFloat = sel ? 5.5 : 4.5
+
+                    // Tick stem up from track
+                    ctx.fill(
+                        Path(CGRect(x: kfX - 0.5, y: midY - 10, width: 1, height: 10)),
+                        with: .color(col.opacity(sel ? 0.55 : 0.35))
+                    )
+                    // Diamond
+                    let diamond = Path { p in
+                        p.move(to: CGPoint(x: kfX,      y: midY - sz))
+                        p.addLine(to: CGPoint(x: kfX + sz * 0.75, y: midY))
+                        p.addLine(to: CGPoint(x: kfX,      y: midY + sz))
+                        p.addLine(to: CGPoint(x: kfX - sz * 0.75, y: midY))
+                        p.closeSubpath()
+                    }
+                    ctx.fill(diamond, with: .color(col.opacity(sel ? 1.0 : 0.72)))
+                    if sel {
+                        ctx.stroke(diamond, with: .color(col.opacity(0.4)), lineWidth: 1)
+                    }
+                    // Value bubble for scope KFs
+                    if sel, let v = kf.scopeValue {
+                        let lbl = String(format: "%.2f", v)
+                        ctx.draw(
+                            Text(lbl)
+                                .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Mono.text),
+                            at: CGPoint(x: kfX, y: midY - sz - 4), anchor: .bottom
+                        )
+                    }
+                    if sel && kf.isLockKF {
+                        ctx.draw(
+                            Text("LOCK")
+                                .font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.orange),
+                            at: CGPoint(x: kfX, y: midY - sz - 4), anchor: .bottom
+                        )
+                    }
+                }
+
+                // ── Playhead ─────────────────────────────────────────
+                // Cap triangle
+                let tri = Path { p in
+                    p.move(to: CGPoint(x: phX - 4, y: 2))
+                    p.addLine(to: CGPoint(x: phX + 4, y: 2))
+                    p.addLine(to: CGPoint(x: phX,     y: 8))
+                    p.closeSubpath()
+                }
+                ctx.fill(tri, with: .color(Mono.text.opacity(0.88)))
+                // Stem
+                ctx.fill(
+                    Path(CGRect(x: phX - 0.5, y: 8, width: 1, height: size.height - 16)),
+                    with: .color(Mono.text.opacity(0.50))
+                )
+            }
+            .allowsHitTesting(false)   // Canvas is display-only
+
+            // Invisible tap/drag layer on top
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { val in
+                            let x = val.location.x
+                            let t = max(0, min(Double((x - inset) / tw), 1.0)) * dur
+                            let moved = val.translation.width.magnitude + val.translation.height.magnitude
+
+                            if isScrubbing {
+                                video.scrub(to: t)
+                                state.videoCurrentTime = t
+                            } else if moved > 3 {
+                                // Started a real drag → scrub mode, deselect any KF
+                                isScrubbing = true
+                                selectedKFID = nil
+                                video.scrub(to: t)
+                                state.videoCurrentTime = t
+                            }
+                            // < 3px movement: wait for onEnded to decide tap vs KF hit
+                        }
+                        .onEnded { val in
+                            let x   = val.location.x
+                            let dx  = val.translation.width.magnitude
+                            let dy  = val.translation.height.magnitude
+                            let t   = max(0, min(Double((x - inset) / tw), 1.0)) * dur
+
+                            if isScrubbing {
+                                isScrubbing = false
+                                video.seek(to: t)
+                                state.videoCurrentTime = t
+                            } else if dx < 5 && dy < 5 {
+                                // Pure tap — check for KF hit first
+                                let hit = state.hudKeyframes.min(by: { a, b in
+                                    abs(inset + tw * CGFloat(a.time / dur) - x) <
+                                    abs(inset + tw * CGFloat(b.time / dur) - x)
+                                })
+                                if let kf = hit,
+                                   abs(inset + tw * CGFloat(kf.time / dur) - x) < 10 {
+                                    if selectedKFID == kf.id {
+                                        selectedKFID = nil
+                                    } else {
+                                        selectedKFID = kf.id
+                                        video.seek(to: kf.time)
+                                        state.videoCurrentTime = kf.time
+                                    }
+                                } else {
+                                    selectedKFID = nil
+                                    video.seek(to: t)
+                                    state.videoCurrentTime = t
+                                }
+                            }
+                        }
+                )
+        }
+        .frame(height: 38)
+    }
+
+    // ── Controls ───────────────────────────────────────────────────────────────
+
+    private var controls: some View {
+        HStack(spacing: 0) {
+
+            // Play / Pause
+            tBtn(icon: video.isPlaying ? "pause.fill" : "play.fill", size: 12) {
+                video.togglePlayPause()
+            }
+            .disabled(!hasVideo && !hasBridge)
+
+            if hasVideo {
+                tBtn(icon: "backward.frame.fill", size: 9)  { stepBy(-1) }
+                tBtn(icon: "forward.frame.fill",  size: 9)  { stepBy(+1) }
+            }
+
+            separator
+
+            // Time readout
+            if hasVideo {
+                Text(formatTime(state.videoCurrentTime))
+                    .font(.system(size: 10, design: .monospaced).monospacedDigit())
+                    .foregroundStyle(Mono.sub)
+                + Text(" / ")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(Mono.dim)
-                    .frame(width: 50, alignment: .trailing)
-                    .monospacedDigit()
-
-            } else if bridge.frameCount > 0 {
-                Slider(value: Binding(
-                    get: { Double(bridge.currentFrame) },
-                    set: { bridge.seekTo(frame: Int($0)) }
-                ), in: 0...Double(max(bridge.frameCount - 1, 1)))
-                .tint(Mono.accent)
-
-                Text("\(bridge.currentFrame + 1)/\(bridge.frameCount)")
-                    .font(.system(size: 10, design: .monospaced))
+                + Text(formatTime(video.duration))
+                    .font(.system(size: 10, design: .monospaced).monospacedDigit())
                     .foregroundStyle(Mono.dim)
-                    .frame(width: 56, alignment: .trailing)
-                    .monospacedDigit()
+            } else if hasBridge {
+                Text("\(bridge.currentFrame + 1) / \(bridge.frameCount)")
+                    .font(.system(size: 10, design: .monospaced).monospacedDigit())
+                    .foregroundStyle(Mono.sub)
+            }
 
-            } else {
-                Capsule()
-                    .fill(Mono.bg2.opacity(0.6))
-                    .frame(height: 3)
+            Spacer()
+
+            // ── Keyframe add buttons ──────────────────────────────────
+            if showKFButtons {
+                if let selID = selectedKFID,
+                   state.hudKeyframes.contains(where: { $0.id == selID }) {
+                    Button {
+                        state.hudKeyframes.removeAll { $0.id == selID }
+                        selectedKFID = nil
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                            Text("DEL")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        }
+                        .foregroundStyle(.red.opacity(0.85))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Color.red.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.red.opacity(0.22), lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 6)
+                }
+
+                if state.hudScopeFrame {
+                    kfBtn(label: "SCOPE", color: Mono.accent) { addScopeKF() }
+                }
+                if state.hudLockArc {
+                    kfBtn(label: "LOCK", color: .orange) { addLockKF() }
+                }
+                separator
             }
 
             // Loop
-            Button { video.isLooping.toggle() } label: {
-                Image(systemName: "repeat")
-                    .font(.system(size: 11))
-                    .foregroundStyle(
-                        video.isLooping
-                            ? (loopBtnHovered ? Mono.accent.opacity(0.7) : Mono.accent)
-                            : (loopBtnHovered ? Mono.text : Mono.dim)
-                    )
-                    .frame(width: 26, height: 26)
-                    .background(loopBtnHovered ? Mono.bg3 : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            tBtn(icon: "repeat", size: 10, active: video.isLooping) {
+                video.isLooping.toggle()
             }
-            .buttonStyle(.plain)
-            .help("Loop playback")
-            .onHover { loopBtnHovered = $0 }
         }
-        .padding(.horizontal, 14)
-        .frame(height: 42)
-        .background(Mono.bg0)
-        .overlay(Rectangle().fill(Mono.muted.opacity(0.7)).frame(height: 1), alignment: .top)
+        .padding(.horizontal, 8)
+        .frame(height: 36)
+    }
+
+    // ── Reusable sub-views ─────────────────────────────────────────────────────
+
+    @ViewBuilder
+    private func tBtn(icon: String, size: CGFloat, active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(active ? Mono.accent : Mono.dim)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func kfBtn(label: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "diamond.fill")
+                    .font(.system(size: 6.5, weight: .bold))
+                Text(label)
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+            }
+            .foregroundStyle(color)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(color.opacity(0.09))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .overlay(RoundedRectangle(cornerRadius: 3).stroke(color.opacity(0.22), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 5)
+        .help("Add \(label) keyframe at current time")
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(Mono.border.opacity(0.5))
+            .frame(width: 1, height: 14)
+            .padding(.horizontal, 7)
+    }
+
+    // ── Actions ────────────────────────────────────────────────────────────────
+
+    private func addScopeKF() {
+        var kfs = state.hudKeyframes
+        kfs.removeAll { $0.isScopeKF && abs($0.time - video.currentTime) < 0.05 }
+        let kf = HUDKeyframe(time: video.currentTime, kind: .scope(state.hudScopeProgress))
+        kfs.append(kf)
+        kfs.sort { $0.time < $1.time }
+        state.hudKeyframes = kfs
+        selectedKFID = kf.id
+    }
+
+    private func addLockKF() {
+        var kfs = state.hudKeyframes
+        kfs.removeAll { $0.isLockKF && abs($0.time - video.currentTime) < 0.05 }
+        let kf = HUDKeyframe(time: video.currentTime, kind: .lock)
+        kfs.append(kf)
+        kfs.sort { $0.time < $1.time }
+        state.hudKeyframes = kfs
+        selectedKFID = kf.id
+    }
+
+    private func stepBy(_ frames: Int) {
+        let step = video.fps > 0 ? Double(frames) / video.fps : Double(frames) / 30.0
+        let t    = max(0, min(video.currentTime + step, video.duration))
+        video.seek(to: t)
+        state.videoCurrentTime = t
     }
 
     private func formatTime(_ t: Double) -> String {
-        let s = Int(t); return String(format: "%d:%02d", s / 60, s % 60)
+        let m = Int(t) / 60
+        let s = t - Double(m * 60)
+        return String(format: "%d:%05.2f", m, s)
     }
 }
 

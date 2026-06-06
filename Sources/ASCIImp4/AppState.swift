@@ -1,6 +1,29 @@
 import SwiftUI
 import Observation
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: – HUD Keyframe model
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct HUDKeyframe: Identifiable, Equatable {
+    var id: UUID = UUID()
+    var time: Double         // video time in seconds
+
+    enum Kind: Equatable {
+        case scope(Float)    // scope progress value: 0=open, 1=fully closed
+        case lock            // trigger the lock-acquired animation at this time
+    }
+    var kind: Kind
+
+    var isScopeKF: Bool  { if case .scope = kind { return true }; return false }
+    var isLockKF:  Bool  { if case .lock  = kind { return true }; return false }
+    var scopeValue: Float? { if case .scope(let v) = kind { return v }; return nil }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: – App state
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Observable
 final class AppState {
 
@@ -130,18 +153,16 @@ final class AppState {
     var hudThreatDiamond: Bool = false      // threat sector diamonds at 4 diagonal positions
     var hudLockArc: Bool = false            // sector-scan lock acquisition arc (8 sectors, holds then steps)
 
-    // Scope zoom animation — 0=full open view, 1=fully scoped in
-    var hudScopeProgress: Float = 1.0       // manual 0-1 slider
-    var hudScopeKFEnabled: Bool = false     // auto-animate from video timeline
-    var hudScopeKFStart: Float = 0.0        // video time (s) where scope begins closing
-    var hudScopeKFEnd: Float = 2.0          // video time (s) where scope fully closed
+    // Scope zoom animation — 0=full open view, 1=fully scoped in (manual slider)
+    var hudScopeProgress: Float = 1.0
 
-    // Lock animation — driven by tracker confidence or video time keyframe
-    var hudLockTime: Date? = nil            // set when target confidence hits threshold
-    var hudLockKFEnabled: Bool = false      // trigger lock at a specific video time
-    var hudLockKFTime: Float = 5.0          // video time (s) when lock fires
+    // Lock animation — set when tracker confidence exceeds threshold
+    var hudLockTime: Date? = nil
 
-    // Video time — synced from VideoProcessor so HUD can keyframe against it
+    // HUD keyframes — added from the timeline transport bar
+    var hudKeyframes: [HUDKeyframe] = []
+
+    // Video time — synced from VideoProcessor for keyframe evaluation
     var videoCurrentTime: Double = 0
 
     // Boot animation — set to Date() when HUD is enabled; drives 2s init sequence
