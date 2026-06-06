@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var lastCGImage: CGImage? = nil
     @State private var previewBg: PreviewBackground = .checker
     @State private var motionTrails: [Int: [CGPoint]] = [:]
+    @State private var keyMonitor: Any? = nil
 
     // Keeps already-visited panels alive so switching back is instant
     @State private var visitedTabs: Set<PanelTab> = [.render]
@@ -65,7 +66,8 @@ struct ContentView: View {
         }
         .background(Mono.bg0)
         .preferredColorScheme(.dark)
-        .onAppear { wireRenderer() }
+        .onAppear { wireRenderer(); installKeyMonitor() }
+        .onDisappear { if let m = keyMonitor { NSEvent.removeMonitor(m) } }
         .onChange(of: appState.hudEnabled)        { _, on in if on { appState.hudInitTime = Date() } }
         .onChange(of: video.currentTime)          { _, t  in appState.videoCurrentTime = t }
         .onChange(of: clusters)                   { _, c  in updateLockState(from: c) }
@@ -98,6 +100,68 @@ struct ContentView: View {
             content()
                 .opacity(show ? 1 : 0)
                 .allowsHitTesting(show)
+        }
+    }
+
+    // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+    private func installKeyMonitor() {
+        // Capture references — all are @Observable classes (reference types), safe to close over
+        let v = video, b = bridge, s = appState
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Pass events through when a modal panel (open/save/color picker) is active
+            guard NSApp.modalWindow == nil else { return event }
+            // Pass events through when a text field has focus
+            if let first = NSApp.keyWindow?.firstResponder, first is NSTextView { return event }
+
+            let mods = event.modifierFlags.intersection([.command, .option, .shift, .control])
+
+            switch event.keyCode {
+
+            case 49 where mods.isEmpty: // Space — play / pause
+                guard !event.isARepeat else { return event }
+                if v.hasContent || b.frameCount > 0 { v.togglePlayPause() }
+                return nil   // consume — never reach buttons
+
+            case 123 where mods.isEmpty: // ← one frame back
+                guard v.hasContent, !event.isARepeat else { break }
+                let step = v.fps > 0 ? 1.0 / v.fps : 1.0 / 30.0
+                let t = max(0, v.currentTime - step)
+                v.seek(to: t); s.videoCurrentTime = t
+                return nil
+
+            case 124 where mods.isEmpty: // → one frame forward
+                guard v.hasContent, !event.isARepeat else { break }
+                let step = v.fps > 0 ? 1.0 / v.fps : 1.0 / 30.0
+                let t = min(v.duration, v.currentTime + step)
+                v.seek(to: t); s.videoCurrentTime = t
+                return nil
+
+            case 123 where mods == .command: // ⌘← jump to start
+                guard v.hasContent else { break }
+                v.seek(to: 0); s.videoCurrentTime = 0
+                return nil
+
+            case 124 where mods == .command: // ⌘→ jump to end
+                guard v.hasContent else { break }
+                v.seek(to: v.duration); s.videoCurrentTime = v.duration
+                return nil
+
+            case 123 where mods == .shift: // ⇧← skip back 5 s
+                guard v.hasContent else { break }
+                let t = max(0, v.currentTime - 5)
+                v.seek(to: t); s.videoCurrentTime = t
+                return nil
+
+            case 124 where mods == .shift: // ⇧→ skip forward 5 s
+                guard v.hasContent else { break }
+                let t = min(v.duration, v.currentTime + 5)
+                v.seek(to: t); s.videoCurrentTime = t
+                return nil
+
+            default: break
+            }
+            return event
         }
     }
 

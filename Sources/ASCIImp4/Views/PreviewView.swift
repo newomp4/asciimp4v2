@@ -1674,14 +1674,14 @@ struct TransportBar: View {
                             if isScrubbing {
                                 video.scrub(to: t)
                                 state.videoCurrentTime = t
-                            } else if moved > 3 {
-                                // Started a real drag → scrub mode, deselect any KF
+                            } else if moved > 6 {
+                                // Unambiguous drag → scrub mode, deselect any KF
                                 isScrubbing = true
                                 selectedKFID = nil
                                 video.scrub(to: t)
                                 state.videoCurrentTime = t
                             }
-                            // < 3px movement: wait for onEnded to decide tap vs KF hit
+                            // < 6px movement: wait for onEnded to decide tap vs KF hit
                         }
                         .onEnded { val in
                             let x   = val.location.x
@@ -1693,7 +1693,7 @@ struct TransportBar: View {
                                 isScrubbing = false
                                 video.seek(to: t)
                                 state.videoCurrentTime = t
-                            } else if dx < 5 && dy < 5 {
+                            } else if dx < 7 && dy < 7 {
                                 // Pure tap — check for KF hit first
                                 let hit = state.hudKeyframes.min(by: { a, b in
                                     abs(inset + tw * CGFloat(a.time / dur) - x) <
@@ -1755,6 +1755,17 @@ struct TransportBar: View {
                     .foregroundStyle(Mono.sub)
             }
 
+            // Keyboard hint
+            if !hasVideo && !hasBridge {
+                Text("⎵ play  ·  ← → frames  ·  ⇧← ⇧→ skip 5s")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(Mono.dim.opacity(0.55))
+            } else {
+                Text("⎵ play  ·  ←→ frame  ·  ⇧←⇧→ 5s  ·  ⌘←⌘→ start/end")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(Mono.dim.opacity(0.40))
+            }
+
             Spacer()
 
             // ── Keyframe add buttons ──────────────────────────────────
@@ -1810,6 +1821,7 @@ struct TransportBar: View {
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(.plain)
+        .focusable(false)
     }
 
     @ViewBuilder
@@ -1828,8 +1840,9 @@ struct TransportBar: View {
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(color.opacity(0.22), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
+        .focusable(false)
         .padding(.trailing, 5)
-        .help("Add \(label) keyframe at current time")
+        .help("Add \(label) keyframe at current time — scrub to position first")
     }
 
     private var separator: some View {

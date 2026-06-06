@@ -34,15 +34,10 @@ struct TooltipLabel: View {
     let tip:  String
 
     var body: some View {
-        HStack(spacing: 5) {
-            Text(text)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Mono.text)
-            Image(systemName: "questionmark.circle")
-                .font(.system(size: 9))
-                .foregroundStyle(Mono.dim)
-                .help(tip)
-        }
+        Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Mono.text)
+            .help(tip)
     }
 }
 
@@ -312,6 +307,7 @@ struct MonoButton: View {
                 .scaleEffect(pressed ? 0.97 : 1.0)
         }
         .buttonStyle(.plain)
+        .focusable(false)
         .animation(.easeOut(duration: 0.08), value: pressed)
         .animation(.easeOut(duration: 0.1),  value: hovered)
         .onHover { hovered = $0 }
