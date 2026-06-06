@@ -62,6 +62,9 @@ struct Preset: Codable, Identifiable {
     var centerDotSize: Float = 4.0
     var showMotionTrails: Bool = false
     var trailLength: Int = 15
+    var singleTarget: Bool = false
+    var targetSmoothness: Float = 0.72
+    var boxColorR: Float = 1; var boxColorG: Float = 1; var boxColorB: Float = 1
 
     // ── Built-in presets ─────────────────────────────────────────────────────
 

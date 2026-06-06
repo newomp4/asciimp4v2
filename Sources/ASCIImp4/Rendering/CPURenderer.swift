@@ -284,13 +284,8 @@ final class CPURenderer {
                 ctx.fill(CGRect(x: 0, y: 0, width: outW, height: outH))
             }
         } else {
-            // Draw source video as background (flip: CGContext bottom-origin, CGImage top-origin).
-            ctx.saveGState()
-            ctx.translateBy(x: 0, y: CGFloat(outH))
-            ctx.scaleBy(x: 1, y: -1)
             ctx.draw(source, in: CGRect(x: CGFloat(offsetX), y: CGFloat(offsetY),
                                         width: CGFloat(renderW), height: CGFloat(renderH)))
-            ctx.restoreGState()
         }
 
         // Passthrough: video only — skip all glyph rendering, jump to overlays
@@ -430,6 +425,9 @@ final class CPURenderer {
             return CGRect(x: tl.x, y: br.y, width: br.x - tl.x, height: tl.y - br.y)
         }
 
+        let bc  = NSColor(state.boxColor).usingColorSpace(.extendedSRGB) ?? NSColor.white
+        let bCG = bc.cgColor
+
         // Motion trails
         if state.showMotionTrails {
             ctx.saveGState()
@@ -439,7 +437,7 @@ final class CPURenderer {
                 let trailSW = sw * 0.55
                 for i in 0..<(trail.count - 1) {
                     let alpha = CGFloat(1.0 - Float(i) / Float(max(trail.count - 1, 1))) * 0.65
-                    ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: alpha))
+                    ctx.setStrokeColor(bc.withAlphaComponent(alpha).cgColor)
                     ctx.setLineWidth(trailSW * CGFloat(1.0 - Float(i) / Float(trail.count) * 0.5))
                     ctx.move(to: pt(trail[i].x, trail[i].y))
                     ctx.addLine(to: pt(trail[i + 1].x, trail[i + 1].y))
@@ -452,7 +450,7 @@ final class CPURenderer {
         // Connector lines
         if state.showConnectors && clusters.count > 1 {
             ctx.saveGState()
-            ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: CGFloat(state.connectorOpacity)))
+            ctx.setStrokeColor(bc.withAlphaComponent(CGFloat(state.connectorOpacity)).cgColor)
             ctx.setLineWidth(sw)
             switch state.connectorStyle {
             case .solid:  ctx.setLineDash(phase: 0, lengths: [])
@@ -473,8 +471,8 @@ final class CPURenderer {
             ctx.saveGState()
             ctx.setLineWidth(sw)
 
-            // Fill pass
-            if state.showFill && state.boxStyle != .crosshair {
+            // Fill pass (not for crosshair or reticle)
+            if state.showFill && state.boxStyle != .crosshair && state.boxStyle != .reticle {
                 let fc = NSColor(state.fillColor).usingColorSpace(.extendedSRGB) ?? NSColor(state.fillColor)
                 ctx.setFillColor(fc.withAlphaComponent(CGFloat(state.fillOpacity)).cgColor)
                 for cl in clusters {
@@ -486,7 +484,7 @@ final class CPURenderer {
             }
 
             // Stroke pass
-            ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            ctx.setStrokeColor(bCG)
             for cl in clusters {
                 let r  = boxRect(cl.bounds)
                 let cr = state.roundedCorners ? CGFloat(6) * sc : 0
@@ -496,7 +494,7 @@ final class CPURenderer {
                     ctx.addPath(CGPath(roundedRect: r, cornerWidth: cr, cornerHeight: cr, transform: nil))
                     ctx.strokePath()
 
-                case .cornerHUD:
+                case .cornerHUD, .spawnBox:
                     let arm = min(r.width, r.height) * 0.22
                     let p = CGMutablePath()
                     func corner(_ x: CGFloat, _ y: CGFloat, _ dx: CGFloat, _ dy: CGFloat) {
@@ -509,9 +507,22 @@ final class CPURenderer {
                     ctx.setLineCap(.square)
                     ctx.addPath(p); ctx.strokePath()
                     ctx.setLineCap(.butt)
+                    // SpawnBox: also draw the fixed-size X at center
+                    if state.boxStyle == .spawnBox {
+                        let cpt  = pt(cl.center.x, cl.center.y)
+                        let xArm = 9 * sc
+                        let xp   = CGMutablePath()
+                        xp.move(to: CGPoint(x: cpt.x - xArm, y: cpt.y - xArm))
+                        xp.addLine(to: CGPoint(x: cpt.x + xArm, y: cpt.y + xArm))
+                        xp.move(to: CGPoint(x: cpt.x + xArm, y: cpt.y - xArm))
+                        xp.addLine(to: CGPoint(x: cpt.x - xArm, y: cpt.y + xArm))
+                        ctx.setLineCap(.round)
+                        ctx.addPath(xp); ctx.strokePath()
+                        ctx.setLineCap(.butt)
+                    }
 
                 case .filled:
-                    break // fill-only, no stroke
+                    break
 
                 case .crosshair:
                     let cpt  = pt(cl.center.x, cl.center.y)
@@ -525,6 +536,26 @@ final class CPURenderer {
                     ctx.setLineCap(.square)
                     ctx.addPath(p); ctx.strokePath()
                     ctx.setLineCap(.butt)
+
+                case .reticle:
+                    let cpt    = pt(cl.center.x, cl.center.y)
+                    let radius = min(r.width, r.height) / 2
+                    let tick   = max(radius * 0.38, 7 * sc)
+                    let gap    = 4 * sc
+                    let p = CGMutablePath()
+                    p.addEllipse(in: CGRect(x: cpt.x - radius, y: cpt.y - radius,
+                                            width: radius * 2, height: radius * 2))
+                    p.move(to: CGPoint(x: cpt.x, y: cpt.y + radius + gap))
+                    p.addLine(to: CGPoint(x: cpt.x, y: cpt.y + radius + gap + tick))
+                    p.move(to: CGPoint(x: cpt.x, y: cpt.y - radius - gap))
+                    p.addLine(to: CGPoint(x: cpt.x, y: cpt.y - radius - gap - tick))
+                    p.move(to: CGPoint(x: cpt.x + radius + gap, y: cpt.y))
+                    p.addLine(to: CGPoint(x: cpt.x + radius + gap + tick, y: cpt.y))
+                    p.move(to: CGPoint(x: cpt.x - radius - gap, y: cpt.y))
+                    p.addLine(to: CGPoint(x: cpt.x - radius - gap - tick, y: cpt.y))
+                    ctx.setLineCap(.square)
+                    ctx.addPath(p); ctx.strokePath()
+                    ctx.setLineCap(.butt)
                 }
             }
             ctx.restoreGState()
@@ -533,7 +564,7 @@ final class CPURenderer {
         // Center dots
         if state.showCenterDot {
             let dotR = CGFloat(state.centerDotSize) * sc / 2
-            ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            ctx.setFillColor(bCG)
             for cl in clusters {
                 let cpt = pt(cl.center.x, cl.center.y)
                 ctx.fillEllipse(in: CGRect(x: cpt.x - dotR, y: cpt.y - dotR, width: dotR * 2, height: dotR * 2))

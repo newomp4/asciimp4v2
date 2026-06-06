@@ -176,8 +176,10 @@ final class ExportManager {
             if let tracker {
                 clusters = tracker.detectSync(TrackerProcessor.Input(
                     cgImage: cg, mode: appState.detectionMode,
-                    maxClusters: appState.maxClusters,
-                    sensitivity: appState.sensitivity, minArea: appState.minArea
+                    maxClusters: appState.singleTarget ? 1 : appState.maxClusters,
+                    sensitivity: appState.sensitivity, minArea: appState.minArea,
+                    singleTarget: appState.singleTarget,
+                    targetSmoothness: appState.targetSmoothness
                 ))
             }
 
@@ -336,8 +338,10 @@ final class ExportManager {
             if let tracker {
                 clusters = tracker.detectSync(TrackerProcessor.Input(
                     cgImage: cg, mode: appState.detectionMode,
-                    maxClusters: appState.maxClusters,
-                    sensitivity: appState.sensitivity, minArea: appState.minArea
+                    maxClusters: appState.singleTarget ? 1 : appState.maxClusters,
+                    sensitivity: appState.sensitivity, minArea: appState.minArea,
+                    singleTarget: appState.singleTarget,
+                    targetSmoothness: appState.targetSmoothness
                 ))
             }
 

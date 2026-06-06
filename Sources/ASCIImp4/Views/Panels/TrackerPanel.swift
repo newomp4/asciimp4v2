@@ -11,8 +11,43 @@ private struct TrackerStylePreset {
 }
 
 private let trackerPresets: [TrackerStylePreset] = [
+    TrackerStylePreset(name: "Pulse", icon: "record.circle") { s in
+        s.trackerEnabled   = true
+        s.singleTarget     = true
+        s.targetSmoothness = 0.82
+        s.detectionMode    = .motion
+        s.maxClusters      = 1
+        s.boxStyle         = .spawnBox
+        s.strokeWidth      = 1.5
+        s.showFill         = false
+        s.showConnectors   = false
+        s.showLabels       = false
+        s.showCenterDot    = false
+        s.showMotionTrails = false
+        s.boxPadding       = 0.10
+        s.sensitivity      = 0.5
+    },
+    TrackerStylePreset(name: "Lock", icon: "scope") { s in
+        s.trackerEnabled   = true
+        s.singleTarget     = true
+        s.targetSmoothness = 0.80
+        s.detectionMode    = .motion
+        s.maxClusters      = 1
+        s.boxStyle         = .reticle
+        s.strokeWidth      = 1.5
+        s.showFill         = false
+        s.showConnectors   = false
+        s.showLabels       = false
+        s.showCenterDot    = true
+        s.centerDotSize    = 4.0
+        s.showMotionTrails = true
+        s.trailLength      = 20
+        s.boxPadding       = 0.12
+        s.sensitivity      = 0.5
+    },
     TrackerStylePreset(name: "Sci-Fi", icon: "viewfinder.circle") { s in
         s.trackerEnabled   = true
+        s.singleTarget     = false
         s.detectionMode    = .motion
         s.maxClusters      = 4
         s.boxStyle         = .cornerHUD
@@ -29,6 +64,7 @@ private let trackerPresets: [TrackerStylePreset] = [
     },
     TrackerStylePreset(name: "Glitch", icon: "waveform.path") { s in
         s.trackerEnabled   = true
+        s.singleTarget     = false
         s.detectionMode    = .random
         s.maxClusters      = 9
         s.boxStyle         = .rect
@@ -44,6 +80,7 @@ private let trackerPresets: [TrackerStylePreset] = [
     },
     TrackerStylePreset(name: "Data", icon: "chart.bar.doc.horizontal") { s in
         s.trackerEnabled   = true
+        s.singleTarget     = false
         s.detectionMode    = .edge
         s.maxClusters      = 6
         s.boxStyle         = .rect
@@ -60,6 +97,7 @@ private let trackerPresets: [TrackerStylePreset] = [
     },
     TrackerStylePreset(name: "Eye", icon: "eye.circle") { s in
         s.trackerEnabled   = true
+        s.singleTarget     = false
         s.detectionMode    = .bright
         s.maxClusters      = 3
         s.boxStyle         = .cornerHUD
@@ -74,6 +112,7 @@ private let trackerPresets: [TrackerStylePreset] = [
     },
     TrackerStylePreset(name: "Ambient", icon: "cloud") { s in
         s.trackerEnabled   = true
+        s.singleTarget     = false
         s.detectionMode    = .random
         s.maxClusters      = 5
         s.boxStyle         = .filled
@@ -89,6 +128,7 @@ private let trackerPresets: [TrackerStylePreset] = [
     },
     TrackerStylePreset(name: "Cinema", icon: "film") { s in
         s.trackerEnabled   = true
+        s.singleTarget     = false
         s.detectionMode    = .bright
         s.maxClusters      = 2
         s.boxStyle         = .cornerHUD
@@ -115,10 +155,44 @@ struct TrackerPanel: View {
         ScrollView {
             VStack(spacing: 0) {
 
+                // ── View Mode ─────────────────────────────────────────────────
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("VIEW MODE")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Mono.dim)
+                            .tracking(1.2)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+
+                    MonoSegmented(options: [
+                        ("ASCII",    CompositeMode.replace),
+                        ("Video",    CompositeMode.passthrough),
+                        ("Overlay",  CompositeMode.overlay),
+                        ("Multiply", CompositeMode.multiply),
+                        ("Screen",   CompositeMode.screen)
+                    ], selection: $state.compositeMode)
+                    .padding(.horizontal, 12)
+
+                    if state.compositeMode == .overlay {
+                        SliderRow(
+                            label: "Mix",
+                            tip: "ASCII opacity over video",
+                            value: $state.overlayOpacity,
+                            range: 0.01...1.0
+                        )
+                    }
+                }
+                .padding(.vertical, 10)
+                .background(Mono.bg0)
+
+                Rectangle().fill(Mono.border).frame(height: 1)
+
                 // ── Master toggle ─────────────────────────────────────────────
                 HStack {
                     TooltipLabel(text: "Enable Tracker",
-                                 tip: "Overlay cluster bounding boxes on the ASCII output")
+                                 tip: "Overlay cluster bounding boxes on the output")
                     Spacer()
                     Toggle("", isOn: $state.trackerEnabled)
                         .toggleStyle(.switch)
@@ -133,8 +207,44 @@ struct TrackerPanel: View {
 
                 if state.trackerEnabled {
 
+                    // ── Target count ──────────────────────────────────────────
+                    VStack(spacing: 6) {
+                        HStack {
+                            Text("TARGETS")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Mono.dim)
+                                .tracking(1.2)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+
+                        MonoSegmented(options: [
+                            ("1 — Single",  true),
+                            ("Multi",       false)
+                        ], selection: $state.singleTarget)
+                        .padding(.horizontal, 12)
+
+                        if !state.singleTarget {
+                            IntSliderRow(
+                                label: state.detectionMode == .random ? "Box Count" : "Max Targets",
+                                tip: "How many simultaneous targets to track",
+                                value: $state.maxClusters,
+                                range: 1...12
+                            )
+                        }
+                        SliderRow(
+                            label: "Smoothness",
+                            tip: "Position smoothing — higher keeps the box stable and damps jitter. Active in Single mode; also sets spawnBox inertia.",
+                            value: $state.targetSmoothness,
+                            range: 0...1.0
+                        )
+                    }
+                    .padding(.vertical, 8)
+
+                    Rectangle().fill(Mono.border).frame(height: 1)
+
                     // ── Style presets ─────────────────────────────────────────
-                    CollapsibleSection(title: "Presets") {
+                    CollapsibleSection(title: "Presets", initiallyExpanded: false) {
                         LazyVGrid(
                             columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
                             spacing: 6
@@ -182,15 +292,6 @@ struct TrackerPanel: View {
                             }
                             .padding(.vertical, 6)
 
-                            IntSliderRow(
-                                label: state.detectionMode == .random ? "Box Count" : "Max Clusters",
-                                tip: state.detectionMode == .random
-                                    ? "Number of random boxes placed each frame"
-                                    : "Max clusters detected (boxes cycle to new positions each frame)",
-                                value: $state.maxClusters,
-                                range: 1...12
-                            )
-
                             if state.detectionMode == .random {
                                 SliderRow(
                                     label: "Size Scale",
@@ -207,10 +308,10 @@ struct TrackerPanel: View {
                                 )
                                 SliderRow(
                                     label: "Min Area",
-                                    tip: "Ignore clusters smaller than this pixel area",
+                                    tip: "Ignore clusters smaller than this — reduce to near 1 to track tiny dots or small bright spots",
                                     value: $state.minArea,
-                                    range: 50...5000,
-                                    step: 50,
+                                    range: 1...2000,
+                                    step: 1,
                                     format: "%.0f"
                                 )
                             }
@@ -229,20 +330,32 @@ struct TrackerPanel: View {
                                 VStack(spacing: 4) {
                                     TooltipLabel(
                                         text: "Style",
-                                        tip: "Rect = full outline · Corner = HUD brackets · Filled = soft block · Cross = crosshair marker"
+                                        tip: "Rect = outline · Corner = HUD brackets · Filled = soft block · Cross = crosshair · Reticle = circle + ticks"
                                     )
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, 12)
 
-                                    MonoSegmented(options: [
-                                        ("Rect",   BoxStyle.rect),
-                                        ("Corner", BoxStyle.cornerHUD),
-                                        ("Filled", BoxStyle.filled),
-                                        ("Cross",  BoxStyle.crosshair)
-                                    ], selection: $state.boxStyle)
+                                    LazyVGrid(
+                                        columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
+                                        spacing: 4
+                                    ) {
+                                        ForEach([BoxStyle.rect, .cornerHUD, .filled, .crosshair, .reticle, .spawnBox], id: \.self) { style in
+                                            GridCell(
+                                                label: style.rawValue,
+                                                selected: state.boxStyle == style,
+                                                action: { state.boxStyle = style }
+                                            )
+                                        }
+                                    }
                                     .padding(.horizontal, 12)
                                 }
                                 .padding(.vertical, 4)
+
+                                ColorRow(
+                                    label: "Box Color",
+                                    tip: "Color of box strokes, trails, connectors, and labels",
+                                    value: $state.boxColor
+                                )
 
                                 if state.boxStyle != .filled {
                                     ToggleRow(
@@ -259,10 +372,10 @@ struct TrackerPanel: View {
                                 }
 
                                 SliderRow(
-                                    label: "Box Padding",
-                                    tip: "Expand or shrink the box relative to the detected cluster",
+                                    label: "Box Size",
+                                    tip: "Scale the box up or down — negative values shrink it inside the detected area, positive values expand it outward",
                                     value: $state.boxPadding,
-                                    range: -0.5...1.5
+                                    range: -0.8...1.5
                                 )
 
                                 // Fill controls

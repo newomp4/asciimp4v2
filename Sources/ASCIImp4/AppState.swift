@@ -42,7 +42,7 @@ final class AppState {
     var detectionMode: DetectionMode = .bright
     var maxClusters: Int = 5
     var sensitivity: Float = 0.5
-    var minArea: Float = 500
+    var minArea: Float = 50
     var showBoundingBoxes: Bool = true
     var boxStyle: BoxStyle = .cornerHUD
     var roundedCorners: Bool = false
@@ -61,10 +61,68 @@ final class AppState {
     var centerDotSize: Float = 4.0
     var showMotionTrails: Bool = false
     var trailLength: Int = 15
+    var singleTarget: Bool = false
+    var targetSmoothness: Float = 0.72
+    var boxColor: Color = .white
+
+    // Region of interest — tracker only detects inside this zone
+    var trackerROIEnabled: Bool = false
+    var trackerROIX: Float = 0.15   // normalized left edge
+    var trackerROIY: Float = 0.15   // normalized top edge
+    var trackerROIW: Float = 0.70   // normalized width
+    var trackerROIH: Float = 0.70   // normalized height
 
     // ── Composite ─────────────────────────────────────────────────────────────
-    var compositeMode: CompositeMode = .replace
+    var compositeMode: CompositeMode = .passthrough
     var overlayOpacity: Float = 0.75
+
+    // ── HUD ───────────────────────────────────────────────────────────────────
+    var hudEnabled: Bool = false
+    var hudTintEnabled: Bool = false
+    var hudTintColor: Color = Color(red: 0.18, green: 0.95, blue: 0.30)
+    var hudTintOpacity: Float = 0.08
+    var hudVignetteEnabled: Bool = true
+    var hudVignetteStrength: Float = 0.50
+    var hudScanLineEnabled: Bool = false
+    var hudScanSpeed: Float = 0.60
+    var hudCornerFramesEnabled: Bool = true
+    var hudDataEnabled: Bool = false
+    var hudCrosshairEnabled: Bool = false
+    var hudCompassEnabled: Bool = true
+    var hudCompassSpeed: Float = 4.0        // degrees per second drift
+    var hudRangeCallouts: Bool = true
+    var hudMargin: Float = 0.0
+    var hudScale: Float = 1.0
+    var hudReticleRing: Bool = false
+    var hudMildots: Bool = false
+    var hudBDCMarks: Bool = false
+    var hudWindMarks: Bool = false
+    var hudScopeFrame: Bool = false
+    var hudScopeRadius: Float = 0.88
+    var hudDataPane: Bool = false
+    var hudNVMode: Bool = false
+    var hudLevelIndicator: Bool = false
+    var hudSweepArc: Bool = false
+    var hudPulseRings: Bool = false
+    var hudBreathPause: Bool = false
+    var hudStadiaCircles: Bool = false
+    var hudElevMarks: Bool = false
+    var hudAcquisitionBrackets: Bool = false
+
+    // Sizing — important for 4K
+    var hudStrokeWidth: Float = 1.0        // line thickness multiplier
+    var hudTextScale: Float = 1.0          // text size multiplier
+
+    // Mid-field elements (zone between center reticle and screen edges)
+    var hudOuterBox: Bool = false           // corner-bracket box centered on frame
+    var hudOuterBoxSize: Float = 0.38      // half-size as fraction of min(fW,fH)
+    var hudRangeArcs: Bool = false          // partial arcs at multiple radii w/ distance labels
+    var hudHorizRef: Bool = false           // long thin horizontal reference lines from center
+    var hudAnglemarks: Bool = false         // clock-position tick marks around reticle
+    var hudTacticalGrid: Bool = false       // subtle full-frame dot grid
+    var hudLateralScale: Bool = false       // vertical ruler bars on left/right mid-sides
+    var hudSignalBars: Bool = false         // IR signal-strength bar graph (right side)
+    var hudCrosswindArrow: Bool = false     // animated crosswind arrow with speed readout
 
     // ── Active preset ─────────────────────────────────────────────────────────
     var activePresetName: String? = nil
@@ -131,6 +189,9 @@ final class AppState {
         centerDotSize      = p.centerDotSize
         showMotionTrails   = p.showMotionTrails
         trailLength        = p.trailLength
+        singleTarget       = p.singleTarget
+        targetSmoothness   = p.targetSmoothness
+        boxColor           = Color(red: Double(p.boxColorR), green: Double(p.boxColorG), blue: Double(p.boxColorB))
         compositeMode      = p.compositeMode
         overlayOpacity     = p.overlayOpacity
 
@@ -188,6 +249,10 @@ final class AppState {
         p.centerDotSize      = centerDotSize
         p.showMotionTrails   = showMotionTrails
         p.trailLength        = trailLength
+        p.singleTarget       = singleTarget
+        p.targetSmoothness   = targetSmoothness
+        let bxc = NSColor(boxColor).usingColorSpace(.extendedSRGB) ?? NSColor(boxColor)
+        p.boxColorR = Float(bxc.redComponent); p.boxColorG = Float(bxc.greenComponent); p.boxColorB = Float(bxc.blueComponent)
         p.compositeMode      = compositeMode
         p.overlayOpacity     = overlayOpacity
         return p

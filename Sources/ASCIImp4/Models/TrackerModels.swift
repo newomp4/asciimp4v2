@@ -31,6 +31,8 @@ enum BoxStyle: String, CaseIterable, Codable {
     case cornerHUD = "Corner"
     case filled    = "Filled"
     case crosshair = "Cross"
+    case reticle   = "Reticle"
+    case spawnBox  = "Spawn"
 }
 
 enum LineStyle: String, CaseIterable, Codable {

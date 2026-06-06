@@ -42,6 +42,9 @@ struct ContentView: View {
                     panelContent(.tracker,  show: selectedTab == .tracker) {
                         TrackerPanel(state: appState)
                     }
+                    panelContent(.hud,      show: selectedTab == .hud) {
+                        HUDPanel(state: appState)
+                    }
                     panelContent(.presets,  show: selectedTab == .presets) {
                         PresetsPanel(state: appState, presetManager: presetMgr)
                     }
@@ -63,12 +66,14 @@ struct ContentView: View {
         .background(Mono.bg0)
         .preferredColorScheme(.dark)
         .onAppear { wireRenderer() }
-        .onChange(of: appState.trackerEnabled) { _, on in on ? rerunTracker() : { clusters = []; motionTrails = [:] }() }
-        .onChange(of: appState.showMotionTrails) { _, on in if !on { motionTrails = [:] } }
-        .onChange(of: appState.detectionMode) { _, _ in rerunTracker() }
-        .onChange(of: appState.sensitivity)   { _, _ in rerunTracker() }
-        .onChange(of: appState.maxClusters)   { _, _ in rerunTracker() }
-        .onChange(of: appState.minArea)        { _, _ in rerunTracker() }
+        .onChange(of: appState.trackerEnabled)    { _, on in on ? rerunTracker() : { clusters = []; motionTrails = [:] }() }
+        .onChange(of: appState.showMotionTrails)  { _, on in if !on { motionTrails = [:] } }
+        .onChange(of: appState.detectionMode)     { _, _ in rerunTracker() }
+        .onChange(of: appState.sensitivity)       { _, _ in rerunTracker() }
+        .onChange(of: appState.maxClusters)       { _, _ in rerunTracker() }
+        .onChange(of: appState.minArea)           { _, _ in rerunTracker() }
+        .onChange(of: appState.singleTarget)      { _, _ in rerunTracker() }
+        .onChange(of: appState.targetSmoothness)  { _, _ in rerunTracker() }
         .onChange(of: exportManager.isExporting) { _, exporting in
             // Auto-dismiss sheet when export finishes and no error
             if !exporting && exportManager.errorMessage == nil && showExport {
@@ -198,10 +203,17 @@ struct ContentView: View {
             if !appState.hasSource {
                 DropZoneOverlay()
             }
-            if appState.trackerEnabled && !clusters.isEmpty {
+            if appState.trackerEnabled {
                 TrackerOverlayView(
                     clusters:    clusters,
                     trails:      motionTrails,
+                    state:       appState,
+                    contentRect: renderer.contentRect
+                )
+            }
+            if appState.hudEnabled {
+                HUDOverlayView(
+                    clusters:    clusters,
                     state:       appState,
                     contentRect: renderer.contentRect
                 )
@@ -306,11 +318,13 @@ struct ContentView: View {
         guard appState.trackerEnabled else { clusters = []; return }
         // Snapshot values on the main thread before crossing to the tracker's serial queue
         let input = TrackerProcessor.Input(
-            cgImage:     cgImage,
-            mode:        appState.detectionMode,
-            maxClusters: appState.maxClusters,
-            sensitivity: appState.sensitivity,
-            minArea:     appState.minArea
+            cgImage:          cgImage,
+            mode:             appState.detectionMode,
+            maxClusters:      appState.singleTarget ? 1 : appState.maxClusters,
+            sensitivity:      appState.sensitivity,
+            minArea:          appState.minArea,
+            singleTarget:     appState.singleTarget,
+            targetSmoothness: appState.targetSmoothness
         )
         tracker.detectAsync(input) { [self] newClusters in
             clusters = newClusters

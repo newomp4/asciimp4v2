@@ -52,9 +52,15 @@ struct TooltipLabel: View {
 
 struct CollapsibleSection<Content: View>: View {
     let title: String
-    @State private var expanded = true
-    @State private var hovered  = false
-    @ViewBuilder var content: Content
+    @State private var expanded: Bool
+    @State private var hovered = false
+    let content: Content
+
+    init(title: String, initiallyExpanded: Bool = true, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self._expanded = State(initialValue: initiallyExpanded)
+        self.content = content()
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -376,6 +382,7 @@ enum PanelTab: String, CaseIterable {
     case render  = "Render"
     case color   = "Color"
     case tracker = "Tracker"
+    case hud     = "HUD"
     case presets = "Presets"
 
     var icon: String {
@@ -383,6 +390,7 @@ enum PanelTab: String, CaseIterable {
         case .render:  return "textformat"
         case .color:   return "paintpalette"
         case .tracker: return "viewfinder"
+        case .hud:     return "binoculars.fill"
         case .presets: return "slider.horizontal.3"
         }
     }
