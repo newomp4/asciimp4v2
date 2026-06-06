@@ -124,6 +124,15 @@ final class AppState {
     var hudSignalBars: Bool = false         // IR signal-strength bar graph (right side)
     var hudCrosswindArrow: Bool = false     // animated crosswind arrow with speed readout
 
+    // New mid-field elements
+    var hudRangeTickFrame: Bool = false     // secondary corner-bracket frame (55% of outer box) with graduation ticks
+    var hudPerimeterRing: Bool = false      // 24-tick azimuth reference ring at mid-field radius
+    var hudThreatDiamond: Bool = false      // threat sector diamonds at 4 diagonal positions
+    var hudLockArc: Bool = false            // sector-scan lock acquisition arc (8 sectors, holds then steps)
+
+    // Boot animation — set to Date() when HUD is enabled; drives 2s init sequence
+    var hudInitTime: Date? = nil
+
     // ── Active preset ─────────────────────────────────────────────────────────
     var activePresetName: String? = nil
 

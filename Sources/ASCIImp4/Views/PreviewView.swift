@@ -503,13 +503,39 @@ struct HUDOverlayView: View {
     private let dataFont     = Font.system(size: 8,  weight: .ultraLight,  design: .default).monospacedDigit()
     private let nvFont       = Font.system(size: 7,  weight: .ultraLight,  design: .default)
 
+    // Returns 0→1 progress through the 2-second init sequence; 1.0 = done (or never started)
+    private func initProg(now: Double) -> Double {
+        guard let it = state.hudInitTime else { return 1.0 }
+        return min(max((now - it.timeIntervalSinceReferenceDate) / 2.0, 0), 1.0)
+    }
+
+    // Drives canvas opacity during boot: flicker-on then smooth ramp
+    private func bootOpacity(now: Double) -> Double {
+        guard let it = state.hudInitTime else { return 1.0 }
+        let e = now - it.timeIntervalSinceReferenceDate
+        if e <= 0    { return 0 }
+        if e >  1.8  { return 1.0 }
+        if e <  0.06 { return 0.85 }
+        if e <  0.12 { return 0.10 }
+        if e <  0.18 { return 0.75 }
+        if e <  0.24 { return 0.10 }
+        return (e - 0.24) / 1.56
+    }
+
     var body: some View {
         TimelineView(.animation) { tl in
-            Canvas { ctx, size in
-                guard state.hudEnabled else { return }
+            let now        = tl.date.timeIntervalSinceReferenceDate
+            let tintColor: Color = state.hudNVMode
+                ? Color(red: 0.22, green: 0.90, blue: 0.30)
+                : state.hudTintColor
+            let prog       = initProg(now: now)
+            let canvasAlpha = bootOpacity(now: now)
 
-                let now  = tl.date.timeIntervalSinceReferenceDate
-                let sc   = CGFloat(state.hudScale)
+            ZStack {
+                Canvas { ctx, size in
+                    guard state.hudEnabled else { return }
+
+                    let sc   = CGFloat(state.hudScale)
                 let bsw  = CGFloat(state.hudStrokeWidth)  // line thickness multiplier
                 // Dynamic fonts — scale with hudTextScale so 4K output stays readable
                 let ts   = CGFloat(state.hudTextScale)
@@ -1266,10 +1292,164 @@ struct HUDOverlayView: View {
                         with: .color(bubbleColor.opacity(0.70))
                     )
                 }
+
+                // ── Range tick frame (secondary engagement bracket) ────────────
+                if state.hudRangeTickFrame {
+                    let half = min(fW, fH) * 0.5 * CGFloat(state.hudOuterBoxSize) * 0.55
+                    let arm  = half * 0.14
+                    var rtf = Path()
+                    rtf.move(to: CGPoint(x: fCX-half+arm, y: fCY-half)); rtf.addLine(to: CGPoint(x: fCX-half, y: fCY-half)); rtf.addLine(to: CGPoint(x: fCX-half, y: fCY-half+arm))
+                    rtf.move(to: CGPoint(x: fCX+half-arm, y: fCY-half)); rtf.addLine(to: CGPoint(x: fCX+half, y: fCY-half)); rtf.addLine(to: CGPoint(x: fCX+half, y: fCY-half+arm))
+                    rtf.move(to: CGPoint(x: fCX+half-arm, y: fCY+half)); rtf.addLine(to: CGPoint(x: fCX+half, y: fCY+half)); rtf.addLine(to: CGPoint(x: fCX+half, y: fCY+half-arm))
+                    rtf.move(to: CGPoint(x: fCX-half+arm, y: fCY+half)); rtf.addLine(to: CGPoint(x: fCX-half, y: fCY+half)); rtf.addLine(to: CGPoint(x: fCX-half, y: fCY+half-arm))
+                    // Graduation ticks along each edge
+                    for i in 1..<6 {
+                        let t = CGFloat(i) / 6.0
+                        let px = fCX - half + t * 2 * half
+                        let py = fCY - half + t * 2 * half
+                        let tw: CGFloat = i == 3 ? 5*sc : 2.5*sc
+                        let tickAlpha: Double = i == 3 ? 0.38 : 0.22
+                        var tk = Path()
+                        tk.move(to: CGPoint(x: px, y: fCY-half));  tk.addLine(to: CGPoint(x: px, y: fCY-half+tw))
+                        tk.move(to: CGPoint(x: px, y: fCY+half));  tk.addLine(to: CGPoint(x: px, y: fCY+half-tw))
+                        tk.move(to: CGPoint(x: fCX-half, y: py));  tk.addLine(to: CGPoint(x: fCX-half+tw, y: py))
+                        tk.move(to: CGPoint(x: fCX+half, y: py));  tk.addLine(to: CGPoint(x: fCX+half-tw, y: py))
+                        ctx.stroke(tk, with: .color(tint.opacity(tickAlpha)), style: StrokeStyle(lineWidth: 0.4 * bsw))
+                    }
+                    ctx.stroke(rtf, with: .color(tint.opacity(0.30)), style: StrokeStyle(lineWidth: bsw * 0.6, lineCap: .square))
+                }
+
+                // ── Azimuth perimeter ring ─────────────────────────────────────
+                if state.hudPerimeterRing {
+                    let ringR: CGFloat = 72 * sc
+                    ctx.stroke(Path(ellipseIn: CGRect(x: fCX-ringR, y: fCY-ringR, width: ringR*2, height: ringR*2)),
+                               with: .color(tint.opacity(0.08)), style: StrokeStyle(lineWidth: 0.5 * bsw))
+                    for i in 0..<24 {
+                        let angle = CGFloat(i) / 24.0 * .pi * 2 - .pi / 2
+                        let isMaj = i % 6 == 0
+                        let isMed = i % 2 == 0
+                        let tLen: CGFloat = isMaj ? 7*sc : (isMed ? 3.5*sc : 2.0*sc)
+                        let alpha: Double  = isMaj ? 0.40 : (isMed ? 0.20 : 0.12)
+                        let tipX = fCX + ringR * cos(angle)
+                        let tipY = fCY + ringR * sin(angle)
+                        var tt = Path()
+                        tt.move(to: CGPoint(x: tipX, y: tipY))
+                        tt.addLine(to: CGPoint(x: tipX - cos(angle)*tLen, y: tipY - sin(angle)*tLen))
+                        ctx.stroke(tt, with: .color(tint.opacity(alpha)), style: StrokeStyle(lineWidth: 0.4 * bsw))
+                        if isMaj {
+                            let labels = [0:"N", 6:"E", 12:"S", 18:"W"]
+                            if let lbl = labels[i] {
+                                let lR = ringR - 10*sc
+                                ctx.draw(Text(lbl).font(compassFont).foregroundStyle(tint.opacity(0.30)),
+                                         at: CGPoint(x: fCX + lR*cos(angle), y: fCY + lR*sin(angle)), anchor: .center)
+                            }
+                        }
+                    }
+                }
+
+                // ── Threat diamonds (4 diagonal positions) ─────────────────────
+                if state.hudThreatDiamond {
+                    let dR: CGFloat  = min(fW, fH) * 0.26 * sc
+                    let dSz: CGFloat = 4.5 * sc
+                    let pulse = 1.0 + 0.08 * sin(now * 1.4)
+                    for qi in 0..<4 {
+                        let angle = CGFloat(qi) * .pi / 2 + .pi / 4
+                        let dx = fCX + dR * cos(angle)
+                        let dy = fCY + dR * sin(angle)
+                        let s  = dSz * CGFloat(pulse)
+                        var diam = Path()
+                        diam.move(to: CGPoint(x: dx, y: dy - s))
+                        diam.addLine(to: CGPoint(x: dx + s, y: dy))
+                        diam.addLine(to: CGPoint(x: dx, y: dy + s))
+                        diam.addLine(to: CGPoint(x: dx - s, y: dy))
+                        diam.closeSubpath()
+                        ctx.stroke(diam, with: .color(tint.opacity(0.32)), style: StrokeStyle(lineWidth: 0.5 * bsw))
+                        ctx.fill(Path(ellipseIn: CGRect(x: dx-1.2, y: dy-1.2, width: 2.4, height: 2.4)),
+                                 with: .color(tint.opacity(0.22)))
+                    }
+                }
+
+                // ── Lock arc (8-sector acquisition scan) ───────────────────────
+                if state.hudLockArc {
+                    let lockR: CGFloat = 58 * sc
+                    let sectorDur: Double = 1.9
+                    let tPhase  = (now / (sectorDur * 8)).truncatingRemainder(dividingBy: 1.0)
+                    let sectIdx = Int(tPhase * 8)
+                    let sectFrac = (tPhase * 8).truncatingRemainder(dividingBy: 1.0)
+                    let holdAlpha = sectFrac < 0.68 ? 0.58 : max(0, (1.0 - sectFrac) / 0.32) * 0.58
+                    let sectAngle = CGFloat(sectIdx) * .pi / 4 - .pi / 2
+
+                    // Faint full ring
+                    ctx.stroke(Path(ellipseIn: CGRect(x: fCX-lockR, y: fCY-lockR, width: lockR*2, height: lockR*2)),
+                               with: .color(tint.opacity(0.06)), style: StrokeStyle(lineWidth: 0.4))
+
+                    // 8 sector-boundary ticks
+                    for s in 0..<8 {
+                        let a = CGFloat(s) * .pi / 4 - .pi / 2
+                        let x1 = fCX + (lockR - 4*sc) * cos(a)
+                        let y1 = fCY + (lockR - 4*sc) * sin(a)
+                        let x2 = fCX + (lockR + 4*sc) * cos(a)
+                        let y2 = fCY + (lockR + 4*sc) * sin(a)
+                        var tk = Path()
+                        tk.move(to: CGPoint(x: x1, y: y1))
+                        tk.addLine(to: CGPoint(x: x2, y: y2))
+                        let active = s == sectIdx
+                        ctx.stroke(tk, with: .color(tint.opacity(active ? 0.55 : 0.18)),
+                                   style: StrokeStyle(lineWidth: active ? 0.7 : 0.4))
+                    }
+
+                    // Held sector arc
+                    var lkArc = Path()
+                    lkArc.addArc(center: CGPoint(x: fCX, y: fCY), radius: lockR,
+                                 startAngle: .radians(Double(sectAngle)),
+                                 endAngle: .radians(Double(sectAngle + .pi * 0.44)), clockwise: false)
+                    ctx.stroke(lkArc, with: .color(tint.opacity(holdAlpha)),
+                               style: StrokeStyle(lineWidth: 0.7 * bsw, lineCap: .round))
+
+                    // Label on active sector
+                    let midAngle = sectAngle + .pi * 0.22
+                    let lR: CGFloat = lockR - 9*sc
+                    ctx.draw(Text(["A","B","C","D","E","F","G","H"][sectIdx]).font(compassFont).foregroundStyle(tint.opacity(0.32)),
+                             at: CGPoint(x: fCX + lR*cos(midAngle), y: fCY + lR*sin(midAngle)), anchor: .center)
+                }
+
+            }   // end Canvas
+            .opacity(canvasAlpha)
+
+            if prog < 0.96 && state.hudEnabled {
+                hudBootView(progress: prog, tint: tintColor)
             }
+        }   // end ZStack
+    }   // end TimelineView
+    .allowsHitTesting(false)
+}
+
+private func hudBootView(progress: Double, tint: Color) -> some View {
+    let phase: String
+    if progress < 0.30      { phase = "INITIALIZING" }
+    else if progress < 0.60 { phase = "CALIBRATING"  }
+    else if progress < 0.84 { phase = "ACQUIRING"     }
+    else                    { phase = "READY"          }
+
+    let alpha: Double = progress < 0.08 ? progress / 0.08
+                      : progress > 0.88 ? max(0, (0.96 - progress) / 0.08) : 1.0
+
+    return VStack(spacing: 5) {
+        Text(phase)
+            .font(.system(size: 9, weight: .thin, design: .monospaced))
+            .tracking(3)
+            .foregroundStyle(tint.opacity(0.65 * alpha))
+        ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(tint.opacity(0.12 * alpha))
+                .frame(width: 96, height: 0.5)
+            Rectangle()
+                .fill(tint.opacity(0.44 * alpha))
+                .frame(width: max(0, 96 * progress), height: 0.5)
         }
-        .allowsHitTesting(false)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

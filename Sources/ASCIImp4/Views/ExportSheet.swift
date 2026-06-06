@@ -15,6 +15,7 @@ struct ExportSheet: View {
     @State private var useSourceFPS       = true
     @State private var customFPS: Double  = 30
     @State private var separateTracker    = false
+    @State private var exportOverlay       = false
     @State private var outputURL: URL?    = nil
     @State private var showSuccess        = false
 
@@ -177,6 +178,27 @@ struct ExportSheet: View {
                             .toggleStyle(.checkbox)
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(Mono.sub)
+                    }
+                }
+
+                // Overlay layer (white on black — for AE Screen/Add blend mode)
+                if appState.trackerEnabled || appState.hudEnabled {
+                    row(label: "Overlay Layer") {
+                        Toggle("White/black .mov", isOn: $exportOverlay)
+                            .toggleStyle(.checkbox)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Mono.sub)
+                    }
+                    if exportOverlay {
+                        HStack(spacing: 5) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 9))
+                            Text("Tracker + HUD on black — use Screen or Add in AE/Premiere")
+                                .font(.system(size: 9, design: .monospaced))
+                        }
+                        .foregroundStyle(Mono.dim)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 2)
                     }
                 }
 
@@ -372,7 +394,7 @@ struct ExportSheet: View {
         let panel = NSSavePanel()
         panel.allowedContentTypes  = [format == .h264 ? UTType.mpeg4Movie : UTType.quickTimeMovie]
         panel.nameFieldStringValue = "ascii-export"
-        panel.begin { [format, outputSizeMode, effectiveFPS, separateTracker] result in
+        panel.begin { [format, outputSizeMode, effectiveFPS, separateTracker, exportOverlay] result in
             guard result == .OK, let url = panel.url else { return }
             outputURL   = url
             showSuccess = false
@@ -386,7 +408,8 @@ struct ExportSheet: View {
                         outputSizeMode:       outputSizeMode,
                         outputFPS:            effectiveFPS,
                         outputURL:            url,
-                        separateTrackerLayer: separateTracker
+                        separateTrackerLayer: separateTracker,
+                        exportOverlayLayer:   exportOverlay
                     )
                 } else if hasSequence {
                     await exportMgr.exportSequence(

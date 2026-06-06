@@ -120,6 +120,226 @@ final class CPURenderer {
         return ctx.makeImage()
     }
 
+    // Renders tracker + HUD geometry as pure white on black.
+    // Use with Screen/Add blend mode in AE to composite overlays on raw footage.
+    func renderOverlayFrame(
+        _ cgImage: CGImage,
+        size: CGSize,
+        for state: AppState,
+        viewportSize: CGSize,
+        clusters: [TrackerCluster],
+        trails: [Int: [CGPoint]] = [:]
+    ) -> CGImage? {
+        let outW = Int(size.width), outH = Int(size.height)
+        let cellScale = viewportSize.width > 0 ? Double(size.width) / Double(viewportSize.width) : 1.0
+
+        let srcAspect  = Double(cgImage.width) / Double(cgImage.height)
+        let viewAspect = size.width / size.height
+        let renderW: Int; let renderH: Int; let offsetX: Int; let offsetY: Int
+        if srcAspect > viewAspect {
+            renderW = outW; renderH = max(1, Int(Double(outW) / srcAspect))
+            offsetX = 0;    offsetY = (outH - renderH) / 2
+        } else {
+            renderH = outH; renderW = max(1, Int(Double(outH) * srcAspect))
+            offsetX = (outW - renderW) / 2; offsetY = 0
+        }
+        let cRect = CGRect(
+            x: CGFloat(offsetX) / CGFloat(outW), y: CGFloat(offsetY) / CGFloat(outH),
+            width: CGFloat(renderW) / CGFloat(outW), height: CGFloat(renderH) / CGFloat(outH)
+        )
+
+        let bmi = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        guard let ctx = CGContext(data: nil, width: outW, height: outH, bitsPerComponent: 8,
+                                  bytesPerRow: outW * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bmi)
+        else { return nil }
+
+        // Black background
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: outW, height: outH))
+
+        // White tracker overlay
+        if state.trackerEnabled && !clusters.isEmpty {
+            CPURenderer.drawTrackerWhite(clusters: clusters, contentRect: cRect, state: state,
+                                         ctx: ctx, outW: outW, outH: outH, scale: cellScale, trails: trails)
+        }
+
+        // White HUD geometry overlay
+        if state.hudEnabled {
+            CPURenderer.drawHUDGeometry(state: state, ctx: ctx, outW: outW, outH: outH, contentRect: cRect)
+        }
+
+        return ctx.makeImage()
+    }
+
+    // Draws tracker elements forced to white — for overlay export.
+    static func drawTrackerWhite(
+        clusters: [TrackerCluster],
+        contentRect: CGRect,
+        state: AppState,
+        ctx: CGContext,
+        outW: Int, outH: Int,
+        scale: Double = 1.0,
+        trails: [Int: [CGPoint]] = [:]
+    ) {
+        let whiteState = state  // we override the color via CGContext directly
+        ctx.saveGState()
+        ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+
+        let sc  = CGFloat(scale)
+        let cW  = CGFloat(outW)
+        let cH  = CGFloat(outH)
+        let sw  = CGFloat(whiteState.strokeWidth) * sc
+        let pad = CGFloat(whiteState.boxPadding)
+
+        func pt(_ nx: CGFloat, _ ny: CGFloat) -> CGPoint {
+            CGPoint(
+                x: (contentRect.minX + nx * contentRect.width)  * cW,
+                y: (contentRect.minY + (1.0 - ny) * contentRect.height) * cH
+            )
+        }
+        func boxRect(_ b: CGRect) -> CGRect {
+            let padded = b.insetBy(dx: -b.width * pad, dy: -b.height * pad)
+            let tl = pt(padded.minX, padded.minY); let br = pt(padded.maxX, padded.maxY)
+            return CGRect(x: tl.x, y: br.y, width: br.x - tl.x, height: tl.y - br.y)
+        }
+
+        // Motion trails
+        if whiteState.showMotionTrails {
+            ctx.setLineCap(.round)
+            for cl in clusters {
+                guard let trail = trails[cl.id], trail.count > 1 else { continue }
+                for i in 0..<(trail.count - 1) {
+                    let alpha = CGFloat(1.0 - Float(i) / Float(max(trail.count - 1, 1))) * 0.55
+                    ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: alpha))
+                    ctx.setLineWidth(sw * 0.55 * CGFloat(1.0 - Float(i) / Float(trail.count) * 0.5))
+                    ctx.move(to: pt(trail[i].x, trail[i].y))
+                    ctx.addLine(to: pt(trail[i + 1].x, trail[i + 1].y))
+                    ctx.strokePath()
+                }
+            }
+            ctx.setLineCap(.butt)
+        }
+        ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.setLineWidth(sw)
+
+        if whiteState.showBoundingBoxes {
+            for cl in clusters {
+                let r = boxRect(cl.bounds)
+                switch whiteState.boxStyle {
+                case .cornerHUD, .spawnBox:
+                    let arm = min(r.width, r.height) * 0.22
+                    let p = CGMutablePath()
+                    p.move(to: CGPoint(x: r.minX, y: r.minY + arm)); p.addLine(to: CGPoint(x: r.minX, y: r.minY)); p.addLine(to: CGPoint(x: r.minX + arm, y: r.minY))
+                    p.move(to: CGPoint(x: r.maxX - arm, y: r.minY)); p.addLine(to: CGPoint(x: r.maxX, y: r.minY)); p.addLine(to: CGPoint(x: r.maxX, y: r.minY + arm))
+                    p.move(to: CGPoint(x: r.maxX, y: r.maxY - arm)); p.addLine(to: CGPoint(x: r.maxX, y: r.maxY)); p.addLine(to: CGPoint(x: r.maxX - arm, y: r.maxY))
+                    p.move(to: CGPoint(x: r.minX + arm, y: r.maxY)); p.addLine(to: CGPoint(x: r.minX, y: r.maxY)); p.addLine(to: CGPoint(x: r.minX, y: r.maxY - arm))
+                    ctx.setLineCap(.square); ctx.addPath(p); ctx.strokePath(); ctx.setLineCap(.butt)
+                default:
+                    ctx.stroke(r)
+                }
+            }
+        }
+        if whiteState.showCenterDot {
+            let dotR = CGFloat(whiteState.centerDotSize) * sc / 2
+            for cl in clusters {
+                let cpt = pt(cl.center.x, cl.center.y)
+                ctx.fillEllipse(in: CGRect(x: cpt.x - dotR, y: cpt.y - dotR, width: dotR*2, height: dotR*2))
+            }
+        }
+        ctx.restoreGState()
+    }
+
+    // Draws key HUD structural elements in white — for overlay export (no animated text).
+    static func drawHUDGeometry(state: AppState, ctx: CGContext, outW: Int, outH: Int, contentRect: CGRect) {
+        guard state.hudEnabled else { return }
+        let fW = CGFloat(outW) * contentRect.width
+        let fH = CGFloat(outH) * contentRect.height
+        let fMinX = contentRect.minX * CGFloat(outW)
+        let fMinY = contentRect.minY * CGFloat(outH)
+        let fMaxX = fMinX + fW;  let fMaxY = fMinY + fH
+        let mg    = CGFloat(state.hudMargin) * min(fW, fH)
+        let fCX   = (fMinX + fMaxX) / 2 + mg
+        let fCY   = (fMinY + fMaxY) / 2 + mg
+        let effW  = fW - mg * 2;  let effH = fH - mg * 2
+        let sc    = CGFloat(state.hudScale)
+        let bsw   = CGFloat(state.hudStrokeWidth)
+
+        ctx.saveGState()
+        ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.72))
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.72))
+        ctx.setLineWidth(bsw)
+
+        // Scope ring outline
+        if state.hudScopeFrame {
+            let scopeR = min(effW, effH) * 0.5 * CGFloat(state.hudScopeRadius)
+            ctx.setAlpha(0.25)
+            ctx.strokeEllipse(in: CGRect(x: fCX - scopeR*0.885, y: fCY - scopeR*0.885, width: scopeR*0.885*2, height: scopeR*0.885*2))
+            ctx.setAlpha(0.72)
+        }
+
+        // Corner marks
+        if state.hudCornerFramesEnabled {
+            let arm = min(effW, effH) * 0.028 * sc
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: fMinX+mg+arm, y: fMinY+mg)); p.addLine(to: CGPoint(x: fMinX+mg, y: fMinY+mg)); p.addLine(to: CGPoint(x: fMinX+mg, y: fMinY+mg+arm))
+            p.move(to: CGPoint(x: fMaxX-mg-arm, y: fMinY+mg)); p.addLine(to: CGPoint(x: fMaxX-mg, y: fMinY+mg)); p.addLine(to: CGPoint(x: fMaxX-mg, y: fMinY+mg+arm))
+            p.move(to: CGPoint(x: fMaxX-mg-arm, y: fMaxY-mg)); p.addLine(to: CGPoint(x: fMaxX-mg, y: fMaxY-mg)); p.addLine(to: CGPoint(x: fMaxX-mg, y: fMaxY-mg-arm))
+            p.move(to: CGPoint(x: fMinX+mg+arm, y: fMaxY-mg)); p.addLine(to: CGPoint(x: fMinX+mg, y: fMaxY-mg)); p.addLine(to: CGPoint(x: fMinX+mg, y: fMaxY-mg-arm))
+            ctx.setLineCap(.square); ctx.addPath(p); ctx.strokePath(); ctx.setLineCap(.butt)
+        }
+
+        // Outer engagement box
+        if state.hudOuterBox {
+            let half = min(effW, effH) * 0.5 * CGFloat(state.hudOuterBoxSize)
+            let arm  = half * 0.22
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: fCX-half+arm, y: fCY-half)); p.addLine(to: CGPoint(x: fCX-half, y: fCY-half)); p.addLine(to: CGPoint(x: fCX-half, y: fCY-half+arm))
+            p.move(to: CGPoint(x: fCX+half-arm, y: fCY-half)); p.addLine(to: CGPoint(x: fCX+half, y: fCY-half)); p.addLine(to: CGPoint(x: fCX+half, y: fCY-half+arm))
+            p.move(to: CGPoint(x: fCX+half-arm, y: fCY+half)); p.addLine(to: CGPoint(x: fCX+half, y: fCY+half)); p.addLine(to: CGPoint(x: fCX+half, y: fCY+half-arm))
+            p.move(to: CGPoint(x: fCX-half+arm, y: fCY+half)); p.addLine(to: CGPoint(x: fCX-half, y: fCY+half)); p.addLine(to: CGPoint(x: fCX-half, y: fCY+half-arm))
+            ctx.setLineCap(.square); ctx.addPath(p); ctx.strokePath(); ctx.setLineCap(.butt)
+        }
+
+        // Crosshair
+        if state.hudCrosshairEnabled {
+            let armLen: CGFloat = 18 * sc; let gap: CGFloat = 8 * sc
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: fCX-armLen-gap, y: fCY)); p.addLine(to: CGPoint(x: fCX-gap, y: fCY))
+            p.move(to: CGPoint(x: fCX+gap, y: fCY));        p.addLine(to: CGPoint(x: fCX+armLen+gap, y: fCY))
+            p.move(to: CGPoint(x: fCX, y: fCY-armLen-gap)); p.addLine(to: CGPoint(x: fCX, y: fCY-gap))
+            p.move(to: CGPoint(x: fCX, y: fCY+gap));        p.addLine(to: CGPoint(x: fCX, y: fCY+armLen+gap))
+            ctx.setLineWidth(0.75 * bsw)
+            ctx.addPath(p); ctx.strokePath()
+
+            if state.hudReticleRing {
+                let ringR = gap + 4 * sc
+                ctx.setAlpha(0.55)
+                ctx.strokeEllipse(in: CGRect(x: fCX-ringR, y: fCY-ringR, width: ringR*2, height: ringR*2))
+                ctx.setAlpha(0.72)
+            }
+        }
+
+        // Angle marks
+        if state.hudAnglemarks {
+            let clockR: CGFloat = 44 * sc
+            for hour in 0..<12 {
+                let angle = CGFloat(hour) / 12.0 * .pi * 2 - .pi / 2
+                let tLen: CGFloat = hour % 3 == 0 ? 5.5*sc : 3.0*sc
+                let tipX = fCX + clockR * cos(angle); let tipY = fCY + clockR * sin(angle)
+                ctx.setAlpha(hour % 3 == 0 ? 0.50 : 0.28)
+                ctx.setLineWidth(0.5 * bsw)
+                ctx.move(to: CGPoint(x: tipX - cos(angle)*tLen, y: tipY - sin(angle)*tLen))
+                ctx.addLine(to: CGPoint(x: tipX, y: tipY))
+                ctx.strokePath()
+            }
+            ctx.setAlpha(0.72); ctx.setLineWidth(bsw)
+        }
+
+        ctx.restoreGState()
+    }
+
     func renderCurrentFrameForExport(for state: AppState, transparent: Bool) -> CGImage? {
         guard let src = sourceImage else { return nil }
         rebuildFontIfNeeded(state: state)

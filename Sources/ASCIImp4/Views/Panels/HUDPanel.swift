@@ -48,6 +48,8 @@ private let hudPresets: [HUDPreset] = [
         s.hudAnglemarks = true; s.hudLateralScale = true
         s.hudSignalBars = false; s.hudCrosswindArrow = false
         s.hudTacticalGrid = false
+        s.hudRangeTickFrame = true; s.hudPerimeterRing = true
+        s.hudThreatDiamond = true; s.hudLockArc = true
     },
     HUDPreset(name: "CQB", icon: "person.fill.viewfinder") { s in
         s.hudEnabled = true
@@ -195,6 +197,10 @@ struct HUDPanel: View {
                             if state.hudOuterBox {
                                 SliderRow(label: "Box Size", tip: "Outer box half-size as fraction of frame", value: $state.hudOuterBoxSize, range: 0.18...0.65, format: "%.2f")
                             }
+                            ToggleRow(label: "Tick Frame",         tip: "Secondary corner-bracket frame at 55% of outer box size — adds a close-range engagement zone with graduation ticks", value: $state.hudRangeTickFrame)
+                            ToggleRow(label: "Azimuth Ring",       tip: "24-tick graduated ring at mid-field radius — cardinal / intercardinal azimuth reference like a compass rose", value: $state.hudPerimeterRing)
+                            ToggleRow(label: "Threat Diamonds",    tip: "Small diamond markers at the 4 diagonal positions (45°/135°/225°/315°) — visual threat sector indicators", value: $state.hudThreatDiamond)
+                            ToggleRow(label: "Lock Arc",           tip: "8-sector acquisition arc that holds on each sector then steps — simulates active sector scan / target lock", value: $state.hudLockArc)
                             ToggleRow(label: "Range Arcs",         tip: "Partial arcs at multiple radii in the mid-field zone with distance labels — depth layers for ranging", value: $state.hudRangeArcs)
                             ToggleRow(label: "Horiz Reference",    tip: "Long thin horizontal reference lines extending from the reticle out into the mid-field zone with ranging ticks", value: $state.hudHorizRef)
                             ToggleRow(label: "Angle Marks",        tip: "Clock-position tick marks around the reticle — 12 marks at every hour position", value: $state.hudAnglemarks)

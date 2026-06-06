@@ -69,7 +69,8 @@ final class ExportManager {
         outputSizeMode: OutputSize,
         outputFPS: Double,
         outputURL: URL,
-        separateTrackerLayer: Bool = false
+        separateTrackerLayer: Bool = false,
+        exportOverlayLayer: Bool = false
     ) async {
         await MainActor.run { isExporting = true; progress = 0; errorMessage = nil; cancelled = false }
 
@@ -77,7 +78,8 @@ final class ExportManager {
             try await _exportVideo(sourceURL: sourceURL, renderer: renderer, appState: appState,
                                    format: format, outputSizeMode: outputSizeMode,
                                    outputFPS: outputFPS, outputURL: outputURL,
-                                   separateTrackerLayer: separateTrackerLayer)
+                                   separateTrackerLayer: separateTrackerLayer,
+                                   exportOverlayLayer: exportOverlayLayer)
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription }
         }
@@ -93,7 +95,8 @@ final class ExportManager {
         outputSizeMode: OutputSize,
         outputFPS: Double,
         outputURL: URL,
-        separateTrackerLayer: Bool
+        separateTrackerLayer: Bool,
+        exportOverlayLayer: Bool = false
     ) async throws {
 
         let asset = AVURLAsset(url: sourceURL)
@@ -153,11 +156,20 @@ final class ExportManager {
             ? makeTrackerWriter(url: trackerURL, size: outputSize)
             : (nil, nil, nil)
 
+        // Optional overlay layer writer (white on black — for AE Screen/Add blend mode)
+        let needsOverlayLayer = exportOverlayLayer
+        let overlayURL = overlayLayerURL(for: outputURL)
+        let (overlayWriter, overlayInput, overlayAdaptor) = needsOverlayLayer
+            ? makeTrackerWriter(url: overlayURL, size: outputSize)
+            : (nil, nil, nil)
+
         guard reader.startReading() else { throw ExportError.readerFailed }
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
         trackerWriter?.startWriting()
         trackerWriter?.startSession(atSourceTime: .zero)
+        overlayWriter?.startWriting()
+        overlayWriter?.startSession(atSourceTime: .zero)
 
         let timescale = CMTimeScale(outputFPS * 100)
         let frameDuration = CMTime(value: CMTimeValue(100), timescale: timescale)
@@ -224,6 +236,20 @@ final class ExportManager {
                 }
             }
 
+            // Overlay layer frame (white on black — tracker + HUD geometry)
+            if let oInput = overlayInput, let oAdaptor = overlayAdaptor {
+                if let oImg = renderer.renderOverlayFrame(cg, size: outputSize, for: appState,
+                                                          viewportSize: viewportSize,
+                                                          clusters: clusters, trails: exportTrails),
+                   let oBuf = cgImageToPixelBuffer(oImg, width: Int(outputSize.width),
+                                                   height: Int(outputSize.height)) {
+                    while !oInput.isReadyForMoreMediaData && !cancelled {
+                        try await Task.sleep(nanoseconds: 5_000_000)
+                    }
+                    if !cancelled { oAdaptor.append(oBuf, withPresentationTime: pts) }
+                }
+            }
+
             frameIdx += 1
             let p = Double(frameIdx) / Double(totalFrames)
             await MainActor.run { progress = min(p, 1.0) }
@@ -231,13 +257,16 @@ final class ExportManager {
 
         writerInput.markAsFinished()
         trackerInput?.markAsFinished()
+        overlayInput?.markAsFinished()
         await writer.finishWriting()
         if let tw = trackerWriter { await tw.finishWriting() }
+        if let ow = overlayWriter { await ow.finishWriting() }
 
         if writer.status == .failed { throw ExportError.writerFailed(writer.error) }
         if cancelled {
             try? FileManager.default.removeItem(at: outputURL)
             try? FileManager.default.removeItem(at: trackerURL)
+            try? FileManager.default.removeItem(at: overlayURL)
         }
     }
 
@@ -408,6 +437,13 @@ final class ExportManager {
         let base = url.deletingPathExtension().lastPathComponent
         return url.deletingLastPathComponent()
             .appendingPathComponent("\(base)_tracker")
+            .appendingPathExtension("mov")
+    }
+
+    private func overlayLayerURL(for url: URL) -> URL {
+        let base = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent()
+            .appendingPathComponent("\(base)_overlay")
             .appendingPathExtension("mov")
     }
 

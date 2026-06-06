@@ -66,6 +66,7 @@ struct ContentView: View {
         .background(Mono.bg0)
         .preferredColorScheme(.dark)
         .onAppear { wireRenderer() }
+        .onChange(of: appState.hudEnabled)        { _, on in if on { appState.hudInitTime = Date() } }
         .onChange(of: appState.trackerEnabled)    { _, on in on ? rerunTracker() : { clusters = []; motionTrails = [:] }() }
         .onChange(of: appState.showMotionTrails)  { _, on in if !on { motionTrails = [:] } }
         .onChange(of: appState.detectionMode)     { _, _ in rerunTracker() }
